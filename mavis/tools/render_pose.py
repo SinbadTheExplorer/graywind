@@ -69,6 +69,10 @@ def main() -> int:
 
     for frame in [int(f) for f in args.frames.split(",")]:
         if args.clip:
+            # Blending is on, so a clip posed at its default weight of zero
+            # renders as whatever idle left behind -- every clip looked alike.
+            for clip in sc.actor.get_anim_names():
+                sc.actor.set_control_effect(clip, 1.0 if clip == args.clip else 0.0)
             sc.actor.pose(args.clip, frame)
             sc._show_prop(args.clip)
         base.taskMgr.step()

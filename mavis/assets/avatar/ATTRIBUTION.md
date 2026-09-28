@@ -72,7 +72,7 @@ sideways.
 The model ships with **no animation** — a game rip gives you the mesh and the
 skeleton in its bind pose, arms out at 45°, which is most of why it read as a
 mannequin. Motion comes from **Mixamo** (Adobe, free with an Adobe ID, licensed
-for use): `Breathing Idle`, `Smoking` and `Dismissing Gesture`, downloaded as FBX and retargeted onto
+for use): `Breathing Idle`, `Smoking`, `Dismissing Gesture`, `Angry` and `Offensive Idle`, downloaded as FBX and retargeted onto
 this model's ValveBiped skeleton by `tools/retarget_anim.py`.
 
 Mixamo clips are not redistributed here either. Download them yourself from
@@ -90,7 +90,8 @@ then, from `mavis/`:
         --python tools/retarget_anim.py -- \
         "<extracted>/keanu.fbx" "<extracted>" /tmp/keanu.glb \
         "idle=<path>/Breathing Idle.fbx" "smoking=<path>/Smoking.fbx" \
-        "dismiss=<path>/Dismissing Gesture.fbx"
+        "dismiss=<path>/Dismissing Gesture.fbx" \
+        "angry=<path>/Angry.fbx" "stance=<path>/Offensive Idle.fbx"
     .venv/bin/gltf2bam /tmp/keanu.glb assets/avatar/keanu.bam
 
     # without animation (fbx_to_glb.py is the same pipeline minus the clips):

@@ -107,6 +107,8 @@ def _at(sc, t, clip="idle"):
     sc._fade = None
     sc._pending = None
     sc._looping = None
+    sc._oneshot = None
+    sc._next_variety = None
     sc._clip_start = 0.0
     sc.idle(t)
     sc.play(clip)
@@ -470,3 +472,73 @@ def test_keanu_breathing_drives_both_shoulders_together(keanu):
     assert len(breath) == 2
     left, right = sorted(breath)
     assert left[1:] == right[1:], "clavicles must share axis, travel and phase"
+
+
+def _variety_due(sc, t):
+    """Rest on idle past its dwell with a variety break scheduled for `t`."""
+    _at(sc, 0.0, "idle")
+    sc._next_variety = t
+    sc.idle(t)
+
+
+@needs_keanu
+def test_idle_breaks_into_a_variety_clip_once_it_is_due(keanu):
+    _variety_due(keanu, 20.0)
+    assert keanu._fade is not None, "the idle never broke into variety"
+    outgoing, incoming, _start, loop = keanu._fade
+    assert (outgoing, loop) == ("idle", False)
+    assert incoming in scene.AVATARS["keanu"]["idle_variety"]
+
+
+@needs_keanu
+def test_variety_does_not_repeat_the_same_clip_back_to_back(keanu):
+    seen = []
+    for _ in range(4):
+        _variety_due(keanu, 20.0)
+        seen.append(keanu._fade[1])
+    assert all(a != b for a, b in zip(seen, seen[1:])), seen
+
+
+@needs_keanu
+def test_a_variety_clip_fades_home_before_its_last_frame(keanu):
+    _variety_due(keanu, 20.0)
+    clip = keanu._fade[1]
+    keanu.idle(20.0 + scene.CROSSFADE + 0.01)      # fade in completes
+    assert keanu._oneshot == clip
+
+    control = keanu.actor.getAnimControl(clip)
+    # Still PLAYING, within CROSSFADE of the end. pose() would stop it, and
+    # the not-playing fallback would pass this test for the wrong reason.
+    keanu.actor.play(clip, fromFrame=control.getNumFrames() - 3)
+    assert control.isPlaying()
+    keanu.idle(21.0)
+    assert keanu._fade is not None and keanu._fade[:2] == (clip, "idle"), (
+        "he would freeze on the variety clip's last frame")
+    for other in keanu.actor.get_anim_names():
+        keanu.actor.set_control_effect(other, 1.0 if other == "idle" else 0.0)
+
+
+@needs_keanu
+def test_a_state_change_during_variety_fades_rather_than_snaps(keanu):
+    _variety_due(keanu, 20.0)
+    clip = keanu._fade[1]
+    keanu.idle(20.0 + scene.CROSSFADE + 0.01)
+    keanu.play("smoking")
+    assert keanu._fade is not None and keanu._fade[:2] == (clip, "smoking")
+
+
+@needs_keanu
+def test_variety_never_interrupts_a_conversational_pose(keanu):
+    _at(keanu, 0.0, "smoking")
+    keanu._next_variety = 1.0
+    keanu.idle(60.0)
+    assert keanu._fade is None and keanu._looping == "smoking"
+
+
+@needs_keanu
+def test_dismiss_is_never_sent_home_to_idle(keanu):
+    _at(keanu, 0.0, "idle")
+    keanu.play("dismiss", loop=False)
+    keanu.actor.pose("dismiss", keanu.actor.getAnimControl("dismiss").getNumFrames() - 1)
+    keanu.idle(30.0)
+    assert keanu._fade is None and keanu._oneshot == "dismiss"

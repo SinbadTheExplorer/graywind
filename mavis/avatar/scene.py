@@ -23,6 +23,7 @@ no-op without it, and both wasted a debugging session that way.
 """
 import math
 import os
+import random
 from pathlib import Path
 
 from direct.actor.Actor import Actor
@@ -72,8 +73,11 @@ AVATARS = {
         # used at all -- a clip already carries breathing, weight shift and
         # head movement, and it cannot share joints with controlJoint, which
         # detaches a joint from animation entirely.
-        "anims": ("idle", "smoking", "dismiss"),
+        "anims": ("idle", "smoking", "dismiss", "angry", "stance"),
         "idle_anim": "idle",
+        # Mixed into the idle now and then (see VARIETY_EVERY): Mixamo's
+        # "Offensive Idle" and "Angry". Each plays once, then he settles back.
+        "idle_variety": ("stance", "angry"),
         # Which clip each conversational moment plays; read by avatar.states.
         # He lights up while he digs for an answer or waits on you, and waves
         # you off on the way out. A moment left out plays nothing new.
@@ -246,6 +250,11 @@ CROSSFADE = 0.45
 MIN_DWELL = 2.5
 # Being told to leave is not something to sit on.
 URGENT = frozenset({"dismiss"})
+# While he rests on his idle clip, every so often he breaks out of it into one
+# of the model's `idle_variety` clips, plays it through once and settles back.
+# Seconds of plain idle between two of those, drawn fresh each time so it
+# never becomes a metronome.
+VARIETY_EVERY = (15.0, 35.0)
 
 
 def _smoothstep(t: float) -> float:
@@ -372,6 +381,10 @@ class AvatarScene:
         self._clip_start = 0.0
         self._pending = None        # (name, loop) deferred by MIN_DWELL
         self._fade = None           # (from, to, started, loop) while blending
+        self._oneshot = None        # a non-looping clip holding the screen
+        self._next_variety = None   # when the idle next breaks into variety
+        self._last_variety = None
+        self._rng = random.Random()
         if self.animated:
             # Without this every set_control_effect is ignored and the clips
             # hard-cut exactly as before. `animBlend` is camelCase on purpose:
@@ -529,7 +542,10 @@ class AvatarScene:
 
     def _begin_fade(self, name: str, loop: bool, snap: bool = False) -> None:
         """Start `name` and blend the outgoing clip out over CROSSFADE."""
-        outgoing = self._fade[1] if self._fade else self._looping
+        # A one-shot on screen is outgoing too: forgetting it made every change
+        # away from a variety clip snap instead of fade.
+        outgoing = self._fade[1] if self._fade else (self._looping or self._oneshot)
+        self._oneshot = None
         (self.actor.loop if loop else self.actor.play)(name)
         self._show_prop(name)
 
@@ -538,6 +554,7 @@ class AvatarScene:
                 self.actor.set_control_effect(clip, 1.0 if clip == name else 0.0)
             self._fade = None
             self._looping = name if loop else None
+            self._oneshot = None if loop else name
             self._clip_start = self._t
             return
 
@@ -557,6 +574,7 @@ class AvatarScene:
                 self.actor.set_control_effect(outgoing, 0.0)
                 self._fade = None
                 self._looping = incoming if loop else None
+                self._oneshot = None if loop else incoming
                 self._clip_start = elapsed
 
         if self._pending is not None and self._fade is None:
@@ -564,6 +582,43 @@ class AvatarScene:
                 name, loop = self._pending      # read BEFORE clearing it
                 self._pending = None
                 self._begin_fade(name, loop)
+
+        self._vary(elapsed)
+
+    def _vary(self, elapsed: float) -> None:
+        """Break the idle loop into a variety clip now and then, and come back.
+
+        Only ever from the idle clip and only when nothing else is moving: a
+        conversational pose (smoking, dismiss) is never interrupted, and a
+        variety clip is itself left the moment the state machine asks for
+        anything, because play() fades from it like any other clip.
+        """
+        variety = [c for c in self.config.get("idle_variety", ())
+                   if c in self.actor.getAnimNames()]
+        if not variety or self._fade is not None or self._pending is not None:
+            return
+        idle = self.config["idle_anim"]
+
+        if self._oneshot in variety:
+            # Start fading home while the clip still has CROSSFADE to run, so
+            # he never freezes on its last frame.
+            control = self.actor.getAnimControl(self._oneshot)
+            left = ((control.getNumFrames() - 1 - control.getFrame())
+                    / control.getFrameRate())
+            if not control.isPlaying() or left <= CROSSFADE:
+                self._begin_fade(idle, True)
+            return
+
+        if self._looping != idle:
+            self._next_variety = None
+            return
+        if self._next_variety is None:
+            self._next_variety = elapsed + self._rng.uniform(*VARIETY_EVERY)
+        elif elapsed >= self._next_variety:
+            self._next_variety = None
+            choices = [c for c in variety if c != self._last_variety] or variety
+            self._last_variety = self._rng.choice(choices)
+            self._begin_fade(self._last_variety, False)
 
     def _attach_prop(self):
         """Parent the cigarette to a hand joint, hidden until a clip wants it.

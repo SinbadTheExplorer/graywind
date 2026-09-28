@@ -5,7 +5,7 @@ Run with Blender, not the project venv:
     /Applications/Blender.app/Contents/MacOS/Blender --background --factory-startup \
         --python mavis/tools/retarget_anim.py -- \
         <keanu.fbx> <texture-dir> <out.glb> idle=<Breathing Idle.fbx> smoking=<Smoking.fbx> \
-        dismiss=<Dismissing Gesture.fbx>
+        dismiss=<Dismissing Gesture.fbx> angry=<Angry.fbx> stance=<Offensive Idle.fbx>
 
 The model ships with **no animation at all** -- a game rip gives you the mesh
 and the skeleton in its authoring bind pose, arms out at 45 degrees. That pose
@@ -51,6 +51,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fbx_to_glb as conv  # noqa: E402
 
 TARGET_HEIGHT = 1.8
+
+# Every clip is baked onto one 30fps timeline. Mixamo ships some clips at 30
+# and some at 60, and the FBX importer silently sets the SCENE rate to that of
+# whichever file it read last -- the exporter then times every clip against
+# it. Importing Angry (60fps) after Smoking (30) halved Smoking's duration.
+OUT_FPS = 30
 
 M = "mixamorig:"
 V = "ValveBiped.Bip01_"
@@ -108,6 +114,10 @@ def retarget(target, anim_fbx, action_name):
     src_action = source.animation_data.action
     start, end = (int(round(f)) for f in src_action.frame_range)
     scene.frame_start, scene.frame_end = start, end
+    # Read straight after the import, which is what sets it: the clip's own rate.
+    src_fps = scene.render.fps / scene.render.fps_base
+    step = src_fps / OUT_FPS
+    out_frames = int(round((end - start) / step)) + 1
 
     pairs = [(source.pose.bones[s], target.pose.bones[t])
              for s, t in BONE_MAP.items()
@@ -146,8 +156,10 @@ def retarget(target, anim_fbx, action_name):
     for pose_bone in target.pose.bones:
         pose_bone.rotation_mode = "QUATERNION"
 
-    for frame in range(start, end + 1):
-        scene.frame_set(frame)
+    for i in range(out_frames):
+        src_frame = start + i * step
+        scene.frame_set(int(src_frame), subframe=src_frame % 1.0)
+        frame = start + i
         for s, t in pairs:
             src_inv, tgt_rest = correction[t.name]
             world = (src_world @ s.matrix.to_3x3() @ src_inv) @ tgt_rest
@@ -158,7 +170,8 @@ def retarget(target, anim_fbx, action_name):
         for _s, t in pairs:
             t.keyframe_insert("rotation_quaternion", frame=frame)
 
-    print(f"  baked {end - start + 1} frames as {action_name!r}")
+    print(f"  baked {out_frames} frames as {action_name!r} "
+          f"(source {end - start + 1} @ {src_fps:g}fps)")
 
     # Names first: removing an object dangles every other reference to it.
     for name in [o.name for o in imported]:
@@ -223,6 +236,8 @@ def main():
     target.scale = tuple(value * factor for value in target.scale)
     print(f"SCALED {height:.2f} -> {TARGET_HEIGHT} (factor {factor:.5f})")
 
+    scene = bpy.context.scene
+    scene.render.fps, scene.render.fps_base = OUT_FPS, 1.0
     bpy.ops.export_scene.gltf(
         filepath=out_glb, export_format="GLB", export_skins=True,
         export_yup=True, export_animations=True, export_apply=False,
