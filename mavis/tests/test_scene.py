@@ -542,3 +542,52 @@ def test_dismiss_is_never_sent_home_to_idle(keanu):
     keanu.actor.pose("dismiss", keanu.actor.getAnimControl("dismiss").getNumFrames() - 1)
     keanu.idle(30.0)
     assert keanu._fade is None and keanu._oneshot == "dismiss"
+
+
+def test_a_model_without_lid_joints_never_blinks(avatar):
+    """jonny is a Ready Player Me rig with none of the CDPR lid joints."""
+    assert avatar.lids is None
+    avatar.idle(10.0)  # must not raise
+
+
+@needs_keanu
+def test_keanu_blink_closes_the_upper_lids(keanu):
+    """Fails flat if the lid joints stop moving the mesh, e.g. forceUpdate()
+    dropped or the joint names drift in a rebuild of the model.
+
+    The body is frozen on one frame first: the fixture is shared, and a clip
+    left playing moves the head between reads for reasons that are not lids.
+    """
+    for clip in keanu.actor.get_anim_names():
+        keanu.actor.set_control_effect(clip, 1.0 if clip == "idle" else 0.0)
+    keanu.actor.pose("idle", 0)
+    keanu.lids.set(0.0)
+    keanu._bundle.forceUpdate()   # set(0.0) is a no-op if already open
+    open_ = _vertices(keanu.actor, "head")
+    keanu.lids.set(1.0)
+    shut = _vertices(keanu.actor, "head")
+    keanu.lids.set(0.0)
+    assert sum(1 for a, b in zip(open_, shut) if a != b) > 50
+    reopened = _vertices(keanu.actor, "head")
+    assert max(abs(x - y) for a, b in zip(open_, reopened)
+               for x, y in zip(a, b)) < 1e-4
+    keanu.actor.loop("idle")
+
+
+@needs_keanu
+def test_keanu_blinks_from_the_idle_tick(keanu):
+    keanu._blink.next_start = 100.0
+    keanu.idle(100.0 + keanu._blink.close + keanu._blink.hold / 2)
+    assert keanu.lids._last == 1.0
+    keanu.idle(100.0 + keanu._blink.length + 0.01)
+    assert keanu.lids._last == 0.0
+
+
+@needs_keanu
+def test_keanu_lenses_are_see_through(keanu):
+    """At the texture's own 0.93 alpha his eyes, and so every blink, are
+    hidden at the live framing."""
+    glass = [g for g in keanu.actor.findAllMatches("**/glass")
+             if g.node().isGeomNode()]
+    assert glass
+    assert all(0.93 * g.getColorScale()[3] <= 0.55 for g in glass)

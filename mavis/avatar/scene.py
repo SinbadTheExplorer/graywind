@@ -26,6 +26,8 @@ import os
 import random
 from pathlib import Path
 
+from avatar.blink import BlinkSchedule
+
 from direct.actor.Actor import Actor
 from direct.gui.OnscreenText import OnscreenText
 from panda3d.core import AmbientLight, DirectionalLight, TextNode, Vec4
@@ -117,6 +119,21 @@ AVATARS = {
         # the skin is constant in this joint's local space to 4 decimal places,
         # so a static offset is correct -- the old numbers were just wrong,
         # with z the right magnitude and the wrong sign.
+        # Blinking rotates the pivot joints the upper lids hang off, which sit
+        # at the centre of each eyeball. Found by rendering: `r` is the lid
+        # axis and NEGATIVE closes (+r opens him wide-eyed, h does nothing);
+        # -22 meets the lower lid, -35 pushes through it. Most other lid joints
+        # are siblings under face_root_JNT rather than children, but the edge
+        # rows carry the lashes and that is what reads as a blink.
+        "blink": {"joints": ("l_J_eye_lid_up_root_1_JNT", "l_J_eye_lid_up_root_2_JNT",
+                             "r_J_eye_lid_up_root_1_JNT", "r_J_eye_lid_up_root_2_JNT"),
+                  "axis": "r", "degrees": -22.0},
+        # The lens texture's alpha is a flat 0.93: the tint strength the game's
+        # glass shader works from, not how see-through the lens looks in game,
+        # where his eyes show through the red. At 0.93 a blink is invisible at
+        # the live framing. Scaled to ~0.5 (owner's call, 2026-09-28), which
+        # still reads as red aviators with the eyes behind them.
+        "lens": {"mesh": "glass", "alpha_scale": 0.54},
         "prop": {"joint": "ValveBiped.Bip01_R_Finger11",
                  "pos": (0.01020, -0.01338, 0.00348), "hpr": (152.5, 90.0, -61.7),
                  "clips": ("smoking",)},
@@ -238,6 +255,36 @@ class _JawMouth:
 
 _DRIVERS = {"slider": _SliderMouth, "joint": _JawMouth}
 
+
+class _Lids:
+    """Upper eyelids, driven like the jaw: rotate away from the rest pose.
+
+    Only touches the bundle when the value changes, since most frames are
+    open-eyed and forceUpdate() on a 355-bone rig is not free.
+    """
+
+    def __init__(self, actor, bundle, config):
+        self._bundle = bundle
+        self._degrees = config["degrees"]
+        index = {"h": 0, "p": 1, "r": 2}[config["axis"]]
+        setter = {"h": "setH", "p": "setP", "r": "setR"}[config["axis"]]
+        self._joints = []
+        for name in config["joints"]:
+            node = actor.controlJoint(None, "modelRoot", name)
+            if node is None or node.isEmpty():
+                raise ValueError(f"joint {name!r} not found in this model")
+            self._joints.append((getattr(node, setter), node.getHpr()[index]))
+        self._last = None
+
+    def set(self, amount: float) -> None:
+        value = max(0.0, min(1.0, amount))
+        if value == self._last:
+            return
+        self._last = value
+        for apply, rest in self._joints:
+            apply(rest + value * self._degrees)
+        self._bundle.forceUpdate()
+
 SWAY_RATE = 0.4
 
 # Clips cross-fade rather than cut. `actor.loop()` restarts at frame 0, which
@@ -332,6 +379,14 @@ class AvatarScene:
             self.actor, self._bundle, self.config["mouth"]
         )
         self.mouth_sliders = self.mouth.sliders
+
+        # Facial joints, like the jaw: no retargeted clip carries them, so
+        # controlJoint here cannot fight the body animation. A model without
+        # the config (jonny) simply never blinks.
+        blink = self.config.get("blink")
+        self.lids = _Lids(self.actor, self._bundle, blink) if blink else None
+        self._blink = BlinkSchedule(random.Random())
+        self._tint_lenses()
 
         # The mouth takes controlJoint on the jaw BEFORE any clip starts. The
         # jaw is a CDPR facial joint and no retargeted clip touches it, so the
@@ -475,6 +530,14 @@ class AvatarScene:
         # +z lifts the actor, which lowers the camera's aim down his body.
         self.actor.set_pos(-center_x, distance, -center_z + framed * HEAD_RISE)
 
+    def _tint_lenses(self):
+        lens = self.config.get("lens")
+        if not lens:
+            return
+        for node in self.actor.findAllMatches(f"**/{lens['mesh']}"):
+            if node.node().isGeomNode():
+                node.setAlphaScale(lens["alpha_scale"])
+
     def _light(self):
         key = DirectionalLight("key")
         key.set_color(Vec4(1.0, 0.95, 0.9, 1))
@@ -499,6 +562,8 @@ class AvatarScene:
         to the procedural channels.
         """
         self._t = elapsed
+        if self.lids is not None:
+            self.lids.set(self._blink.amount(elapsed))
         if not self.animated:
             self.actor.set_h(math.sin(elapsed * SWAY_RATE)
                              * self.config.get("sway", 12.0))
