@@ -216,3 +216,91 @@ def test_say_to_wav_writes_real_audio(tmp_path):
     path = tmp_path / "scaffold.wav"
     voice_client.say_to_wav("Wake up, samurai.", str(path))
     assert path.exists() and path.stat().st_size > 1000
+
+
+# Echoes the gain it was sent, or reports the one it chose when sent none.
+GAIN_WORKER = textwrap.dedent("""
+    import json, sys
+    sys.stdout.write(json.dumps({"ready": True}) + "\\n")
+    sys.stdout.flush()
+    for line in sys.stdin:
+        req = json.loads(line)
+        if req.get("op") == "shutdown":
+            break
+        sys.stdout.write(json.dumps({"id": req.get("id"), "ok": True,
+                                     "gain": req.get("gain", 6.5)}) + "\\n")
+        sys.stdout.flush()
+""")
+
+
+def test_gain_goes_to_the_worker_and_comes_back(tmp_path):
+    client = _client(tmp_path, GAIN_WORKER)
+    try:
+        client.start()
+        assert client.convert("in.wav", "out.wav")
+        assert client.last_gain == 6.5          # worker normalised, said so
+        assert client.convert("in.wav", "out.wav", gain=2.25)
+        assert client.last_gain == 2.25         # worker used the one sent
+    finally:
+        client.stop()
+
+
+def test_fit_cost_recovers_a_clean_line():
+    pairs = [(1, 2.5), (2, 3.0), (4, 4.0), (6, 5.0)]
+    assert voice_client.fit_cost(pairs) == pytest.approx((2.0, 0.5))
+
+
+def test_fit_cost_shrugs_off_one_swap_storm():
+    pairs = [(1, 2.5), (2, 3.0), (3, 3.5), (4, 4.0), (5, 21.0), (6, 5.0)]
+    fixed, rate = voice_client.fit_cost(pairs)
+    assert rate == pytest.approx(0.5) and fixed == pytest.approx(2.0)
+
+
+def test_fit_cost_without_spread_is_the_cautious_default():
+    assert voice_client.fit_cost([]) == voice_client.DEFAULT_COST
+    assert voice_client.fit_cost([(2, 3.0), (2.2, 9.0)]) == voice_client.DEFAULT_COST
+
+
+def test_fit_cost_is_clamped():
+    fixed, rate = voice_client.fit_cost([(1, 100.0), (5, 0.1)])
+    assert voice_client.RATE_BOUNDS[0] <= rate <= voice_client.RATE_BOUNDS[1]
+    assert voice_client.FIXED_BOUNDS[0] <= fixed <= voice_client.FIXED_BOUNDS[1]
+
+
+def test_the_default_cost_voices_an_answer_whole():
+    """The uncalibrated planner must reproduce the pre-chunking behaviour."""
+    from avatar import chunks
+    text = "Gold rises when yields fall, choom. Central banks buy it. So do you."
+    assert chunks.plan(text, fixed=voice_client.DEFAULT_COST[0],
+                       rate=voice_client.DEFAULT_COST[1]) == [text]
+
+
+CALIBRATING_WORKER = textwrap.dedent("""
+    import json, sys
+    sys.stdout.write(json.dumps({"ready": True,
+                                 "calibration": [[1, 1.5], [4, 3.0]]}) + "\\n")
+    sys.stdout.flush()
+    n = 0
+    for line in sys.stdin:
+        req = json.loads(line)
+        if req.get("op") == "shutdown":
+            break
+        n += 1
+        sys.stdout.write(json.dumps({"id": req.get("id"), "ok": True, "gain": 1.0,
+                                     "seconds": 99.0 if n == 1 else 3.5,
+                                     "audio_seconds": 5.0, "cold": n == 1}) + "\\n")
+        sys.stdout.flush()
+""")
+
+
+def test_cost_model_learns_from_calibration_and_warm_calls_only(tmp_path):
+    client = _client(tmp_path, CALIBRATING_WORKER)
+    try:
+        client.start()
+        assert client.cost_model() == pytest.approx((1.0, 0.5))
+        client.convert("a.wav", "b.wav")        # cold: 99s must be ignored
+        assert client.cost_model() == pytest.approx((1.0, 0.5))
+        client.convert("a.wav", "b.wav")        # warm (5s -> 3.5s) fits the line
+        assert client.cost_model() == pytest.approx((1.0, 0.5))
+    finally:
+        client.stop()

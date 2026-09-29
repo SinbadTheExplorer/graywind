@@ -37,7 +37,10 @@ ACTOR_REF_WAV = os.environ.get(
 )
 WORKER_SCRIPT = str(Path(__file__).resolve().parent.parent / "scripts" / "voice_worker.py")
 
-READY_TIMEOUT = 90.0
+# Model load plus compiling the first-chunk buckets. Load alone hit 59s under
+# heavy swap on 2026-09-28, and missing this deadline degrades the whole
+# session to the plain voice, so it is generous.
+READY_TIMEOUT = 240.0
 CONVERT_TIMEOUT = 120.0
 # How long a shutdown request is given before the worker is killed. A healthy
 # worker answers at once; this only costs time when one is already wedged.
@@ -50,6 +53,38 @@ STOP_TIMEOUT = 5.0
 OUTPUT_SAMPLE_RATE = 24000
 
 _EOF = object()
+
+# Before any timing is known: slow enough that the chunk planner voices the
+# answer whole, i.e. exactly the pre-chunking behaviour. Never optimistic.
+DEFAULT_COST = (2.5, 1.2)
+# Clamp a fitted model to what this hardware can physically do, so one swap
+# storm cannot talk the planner into nonsense.
+FIXED_BOUNDS = (0.2, 10.0)
+RATE_BOUNDS = (0.1, 3.0)
+TIMING_WINDOW = 12
+
+
+def fit_cost(pairs, default=DEFAULT_COST):
+    """(fixed, rate) with conversion = fixed + rate * audio_seconds.
+
+    Theil-Sen: the median of pairwise slopes, then the median intercept.
+    Medians rather than least squares because single calls here have jumped
+    from 6s to 21s under swap, and one of those would drag a mean fit off.
+    """
+    slopes = [(t2 - t1) / (d2 - d1)
+              for i, (d1, t1) in enumerate(pairs)
+              for d2, t2 in pairs[i + 1:] if abs(d2 - d1) >= 0.5]
+    if not slopes:
+        return default
+    rate = min(max(_median(slopes), RATE_BOUNDS[0]), RATE_BOUNDS[1])
+    fixed = _median([t - rate * d for d, t in pairs])
+    return min(max(fixed, FIXED_BOUNDS[0]), FIXED_BOUNDS[1]), rate
+
+
+def _median(values):
+    values = sorted(values)
+    mid = len(values) // 2
+    return values[mid] if len(values) % 2 else (values[mid - 1] + values[mid]) / 2
 
 
 def say_to_wav(text: str, path: str) -> None:
@@ -74,6 +109,8 @@ class VoiceClient:
         self.degraded = False
         self.last_error = None
         self.device = None
+        self.last_gain = None
+        self._timings = collections.deque(maxlen=TIMING_WINDOW)
         self._next_id = 0
         self._lock = threading.Lock()
         self._messages = queue.Queue()
@@ -149,14 +186,22 @@ class VoiceClient:
             if message.get("ready"):
                 self.ready = True
                 self.device = message.get("device")
+                for pair in message.get("calibration") or ():
+                    self._timings.append(tuple(pair))
                 return
             if "ready" in message:
                 detail = message.get("error") or self._stderr_tail()
                 self._degrade(f"voice worker failed to load: {detail}")
                 return
 
-    def convert(self, in_path: str, out_path: str, timeout=CONVERT_TIMEOUT) -> bool:
-        """True if `out_path` now holds Johnny-voiced audio."""
+    def convert(self, in_path: str, out_path: str, timeout=CONVERT_TIMEOUT,
+                gain=None) -> bool:
+        """True if `out_path` now holds Johnny-voiced audio.
+
+        `gain` fixes the output level instead of normalising the clip, so the
+        chunks of one answer share a loudness; `last_gain` is the gain the
+        worker used, to pass to the next chunk.
+        """
         if not self.ready or self.pid is None:
             return False
 
@@ -164,6 +209,8 @@ class VoiceClient:
             self._next_id += 1
             request = {"id": self._next_id, "op": "convert",
                        "input": in_path, "output": out_path}
+            if gain is not None:
+                request["gain"] = gain
             try:
                 self.proc.stdin.write(json.dumps(request) + "\n")
                 self.proc.stdin.flush()
@@ -186,7 +233,16 @@ class VoiceClient:
         if not message.get("ok"):
             self.last_error = message.get("error", "voice conversion failed")
             return False
+        self.last_gain = message.get("gain")
+        # A call that compiled a new bucket measures the compile, not the
+        # machine, and would make the planner needlessly pessimistic.
+        if "audio_seconds" in message and not message.get("cold"):
+            self._timings.append((message["audio_seconds"], message["seconds"]))
         return True
+
+    def cost_model(self):
+        """(fixed, rate) from this session's recent warm conversions."""
+        return fit_cost(list(self._timings))
 
     def _degrade(self, reason: str) -> None:
         self.ready = False

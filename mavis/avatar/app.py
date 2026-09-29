@@ -24,7 +24,9 @@ import time
 import numpy as np
 from scipy.io import wavfile
 
-from avatar import brain, capture, dismiss, lipsync, states, stt, voice_client
+from avatar import (brain, capture, chunks, dismiss, lipsync, states, stt,
+                    voice_client)
+from avatar.voice_stream import VoiceStream
 
 # Idle prompts he gives into silence before he gives up and goes dark.
 SILENCE_PROMPTS = 2
@@ -57,6 +59,12 @@ def has_speech(samples: np.ndarray) -> bool:
         return False
     blocks = usable.reshape(-1, capture.BLOCK)
     return bool((np.sqrt(np.mean(np.square(blocks), axis=1)) >= capture.SILENCE_RMS).any())
+
+
+def _discard(stream) -> None:
+    """Stop producing an answer's audio and delete its files. Cannot raise."""
+    stream.cancel()
+    shutil.rmtree(stream.workdir, ignore_errors=True)
 
 
 class Runtime:
@@ -163,22 +171,41 @@ class Runtime:
                     return
         self._manual_wake.clear()
 
-    def _voice(self, text: str) -> str:
-        """Johnny-voiced wav for `text`, or the plain scaffold if VC fails."""
+    def _voice(self, text: str) -> VoiceStream:
+        """Johnny-voiced chunks of `text`, produced while earlier ones play.
+
+        A chunk whose conversion fails plays as its plain scaffold, and the
+        failure goes on screen, exactly as a whole failed answer used to.
+        """
         workdir = tempfile.mkdtemp(prefix="mavis-")
-        scaffold = os.path.join(workdir, "scaffold.wav")
-        final = os.path.join(workdir, "johnny.wav")
-        try:
-            voice_client.say_to_wav(text, scaffold)
-            if self.voice is not None and self.voice.convert(scaffold, final):
-                return final
-            if self.voice is not None and self.voice.last_error:
-                reason = self.voice.last_error
-                self.on_render(lambda: self.machine.note_degraded(reason))
-            return scaffold
-        except BaseException:
-            shutil.rmtree(workdir, ignore_errors=True)
-            raise
+        fixed, rate = (self.voice.cost_model() if self.voice is not None
+                       else voice_client.DEFAULT_COST)
+        parts = chunks.plan(text, fixed=fixed, rate=rate)
+
+        def convert(src, out, gain):
+            if self.voice is None or not self.voice.convert(src, out, gain=gain):
+                return False, None
+            return True, self.voice.last_gain
+
+        def degraded():
+            reason = self.voice.last_error
+            if reason:
+                try:
+                    self.on_render(lambda: self.machine.note_degraded(reason))
+                except RuntimeError:
+                    pass    # shutting down; nothing left to show it on
+
+        stream = VoiceStream(parts, workdir, scaffold=voice_client.say_to_wav,
+                             convert=convert,
+                             on_degraded=degraded if self.voice else None)
+        return stream.start()
+
+    def _speak(self, first: str, stream: VoiceStream) -> None:
+        """Play the answer's chunks back to back as they become ready."""
+        path = first
+        while path is not None:
+            self.say(path)
+            path = stream.next()
 
     def _settle_notice(self) -> None:
         """Clear a stale error, but keep saying so while the voice is degraded.
@@ -191,18 +218,26 @@ class Runtime:
         else:
             self.scene.show_notice("")
 
-    async def _answer(self, question: str) -> tuple[str, str]:
-        """The spoken wav and the exact text it says.
+    async def _answer(self, question: str):
+        """(first wav, the stream of the rest, the exact answer text).
 
-        The text is returned rather than re-derived so the caption is the
-        answer itself, not a transcription of his audio -- captioning our own
-        speech through STT would add both latency and a way to be wrong.
+        Returns once the FIRST chunk is voiced, not the whole answer -- that
+        is the point of chunking. The text is returned rather than re-derived
+        so the caption is the answer itself, not a transcription of his audio.
         """
         answer = await brain.ask(question)
         if not answer:
             raise brain.BrainError("the backend returned an empty answer")
-        wav = await asyncio.to_thread(self._voice, answer)
-        return wav, answer
+        stream = self._voice(answer)
+        try:
+            first = await asyncio.to_thread(stream.next)
+        except BaseException:
+            _discard(stream)
+            raise
+        if first is None:
+            _discard(stream)
+            raise brain.BrainError("the answer produced no audio")
+        return first, stream, answer
 
     async def _conversation(self) -> None:
         """One wake-to-dismissal session."""
@@ -246,22 +281,22 @@ class Runtime:
                 pending.cancel()
                 raise
             try:
-                wav, answer_text = await pending
+                first, stream, answer_text = await pending
             except brain.BrainError as exc:
                 self.on_render(lambda: self.machine.on_failure(str(exc)))
                 continue
-            self.on_render(lambda: (self._settle_notice(),
-                                    self.scene.show_caption(answer_text),
-                                    self.machine.on_answer_ready()))
             try:
-                await asyncio.to_thread(self.say, wav)
+                self.on_render(lambda: (self._settle_notice(),
+                                        self.scene.show_caption(answer_text),
+                                        self.machine.on_answer_ready()))
+                await asyncio.to_thread(self._speak, first, stream)
             finally:
-                # rmtree FIRST: it cannot raise, and on_render can. Escape
+                # Discard FIRST: it cannot raise, and on_render can. Escape
                 # pressed mid-sentence sets _stopping, the render loop is
                 # already gone, and on_render gives up with RuntimeError --
                 # which would otherwise skip this cleanup and replace whatever
                 # `say` was propagating with a shutdown error.
-                shutil.rmtree(os.path.dirname(wav), ignore_errors=True)
+                _discard(stream)
                 try:
                     self.on_render(lambda: self.scene.show_caption(""))
                 except RuntimeError:

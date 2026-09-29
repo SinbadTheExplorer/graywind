@@ -6,6 +6,7 @@ kind of change this repo has been burned by before: correct in isolation, with
 the call site free to drift.
 """
 import asyncio
+import os
 
 import pytest
 
@@ -41,20 +42,122 @@ def _runtime():
     return app_mod.Runtime(StubBase(), CaptionScene(), machine=object())
 
 
-def test_answer_returns_the_wav_and_the_exact_text(monkeypatch):
+class FakeStream:
+    def __init__(self, paths):
+        self.paths = list(paths)
+        self.cancelled = False
+        self.workdir = "/nonexistent/mavis-test"
+
+    def next(self, timeout=None):
+        return self.paths.pop(0) if self.paths else None
+
+    def cancel(self):
+        self.cancelled = True
+
+
+def test_answer_returns_the_first_chunk_the_stream_and_the_exact_text(monkeypatch):
     """The caption must be the answer itself, not a re-derivation of it."""
     runtime = _runtime()
+    stream = FakeStream(["/tmp/fake/voice-0.wav", "/tmp/fake/voice-1.wav"])
 
     async def fake_ask(q):
         return "Gold bids when real yields fall, choom."
 
     monkeypatch.setattr(app_mod.brain, "ask", fake_ask)
-    monkeypatch.setattr(runtime, "_voice", lambda text: "/tmp/fake/johnny.wav")
+    monkeypatch.setattr(runtime, "_voice", lambda text: stream)
 
-    wav, text = asyncio.run(runtime._answer("what about gold"))
+    first, rest, text = asyncio.run(runtime._answer("what about gold"))
 
-    assert wav == "/tmp/fake/johnny.wav"
+    assert first == "/tmp/fake/voice-0.wav"
+    assert rest is stream and rest.paths == ["/tmp/fake/voice-1.wav"]
     assert text == "Gold bids when real yields fall, choom."
+
+
+def test_answer_with_no_audio_is_a_failure_not_a_silent_answer(monkeypatch):
+    runtime = _runtime()
+    stream = FakeStream([])
+
+    async def fake_ask(q):
+        return "Something."
+
+    monkeypatch.setattr(app_mod.brain, "ask", fake_ask)
+    monkeypatch.setattr(runtime, "_voice", lambda text: stream)
+
+    with pytest.raises(app_mod.brain.BrainError):
+        asyncio.run(runtime._answer("anything"))
+    assert stream.cancelled
+
+
+def test_speak_plays_every_chunk_in_order(monkeypatch):
+    runtime = _runtime()
+    played = []
+    monkeypatch.setattr(runtime, "say", played.append)
+    runtime._speak("c0", FakeStream(["c1", "c2"]))
+    assert played == ["c0", "c1", "c2"]
+
+
+class FakeVoice:
+    """Converts the first `good` chunks, then fails like a wedged worker."""
+
+    def __init__(self, good):
+        self.good = good
+        self.calls = []
+        self.last_gain = None
+        self.last_error = None
+
+    def convert(self, src, out, gain=None):
+        self.calls.append(gain)
+        if len(self.calls) > self.good:
+            self.last_error = "voice worker did not answer within 120s"
+            return False
+        with open(out, "wb") as fh:
+            fh.write(b"x")
+        self.last_gain = gain or 5.0
+        return True
+
+    def cost_model(self):
+        return 0.5, 0.3     # fast enough that the planner really chunks
+
+
+class NoticeMachine:
+    def __init__(self):
+        self.degraded = []
+
+    def note_degraded(self, reason):
+        self.degraded.append(reason)
+
+
+def _voiced(monkeypatch, voice, text):
+    machine = NoticeMachine()
+    runtime = app_mod.Runtime(StubBase(), CaptionScene(), machine=machine, voice=voice)
+    monkeypatch.setattr(runtime, "on_render", lambda fn: fn())
+    monkeypatch.setattr(app_mod.voice_client, "say_to_wav",
+                        lambda t, path: open(path, "wb").write(b"s"))
+    stream = runtime._voice(text)
+    paths = []
+    while (p := stream.next(timeout=5)) is not None:
+        paths.append(os.path.basename(p))
+    app_mod._discard(stream)
+    return paths, machine
+
+
+TEXT = ("Look, choom. " + "The Fed moves first and everyone else follows behind. " * 6)
+
+
+def test_voice_chunks_share_one_gain(monkeypatch):
+    voice = FakeVoice(good=99)
+    paths, machine = _voiced(monkeypatch, voice, TEXT)
+    assert len(paths) > 1 and all(p.startswith("voice-") for p in paths)
+    assert voice.calls[0] is None and set(voice.calls[1:]) == {5.0}
+    assert machine.degraded == []
+
+
+def test_a_failing_voice_falls_back_to_the_scaffold_and_says_so(monkeypatch):
+    voice = FakeVoice(good=1)
+    paths, machine = _voiced(monkeypatch, voice, TEXT)
+    assert paths[0].startswith("voice-")
+    assert paths[1:] and all(p.startswith("scaffold-") for p in paths[1:])
+    assert machine.degraded == ["voice worker did not answer within 120s"]
 
 
 def test_answer_still_rejects_an_empty_answer(monkeypatch):
