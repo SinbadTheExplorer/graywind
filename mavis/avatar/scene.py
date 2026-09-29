@@ -133,6 +133,13 @@ AVATARS = {
         # where his eyes show through the red. At 0.93 a blink is invisible at
         # the live framing. Scaled to ~0.5 (owner's call, 2026-09-28), which
         # still reads as red aviators with the eyes behind them.
+        # Brows rise on emphasis while he talks (lipsync.emphasis). All 26
+        # brow joints hang off face_root_JNT, so one "up" in the face's own
+        # frame moves them together and follows the head. Found by rendering:
+        # 3mm reads as a natural raise, 6mm as surprise; lowering them only
+        # tucks them behind the glasses frame, so there is no frown channel.
+        "brows": {"match": "_J_eye_brows_", "parent": "face_root_JNT",
+                  "metres": 0.004},
         "lens": {"mesh": "glass", "alpha_scale": 0.54},
         "prop": {"joint": "ValveBiped.Bip01_R_Finger11",
                  "pos": (0.01020, -0.01338, 0.00348), "hpr": (152.5, 90.0, -61.7),
@@ -254,6 +261,41 @@ class _JawMouth:
 
 
 _DRIVERS = {"slider": _SliderMouth, "joint": _JawMouth}
+
+
+class _Brows:
+    """Brow raise: slide every brow joint up the face from its rest pose."""
+
+    def __init__(self, actor, bundle, config):
+        self._bundle = bundle
+        names = [j.getName() for j in actor.getJoints()
+                 if config["match"] in j.getName()]
+        if not names:
+            raise ValueError(f"no brow joints matching {config['match']!r}")
+        # "Up" measured once, in the parent joint's own frame, with the model
+        # standing in its first idle frame: it then travels with the head
+        # instead of pointing at the ceiling when he tilts.
+        parent = actor.exposeJoint(None, "modelRoot", config["parent"])
+        if parent is None or parent.isEmpty():
+            # exposeJoint only warns on a bad name, and "up" would then be
+            # measured against the wrong frame: brows sliding sideways, no error.
+            raise ValueError(f"joint {config['parent']!r} not found in this model")
+        up = parent.getRelativeVector(actor, (0, 0, config["metres"]))
+        self._joints = []
+        for name in names:
+            node = actor.controlJoint(None, "modelRoot", name)
+            self._joints.append((node, node.getPos()))
+        self._up = up
+        self._last = None
+
+    def set(self, amount: float) -> None:
+        value = max(0.0, min(1.0, amount))
+        if value == self._last:
+            return
+        self._last = value
+        for node, rest in self._joints:
+            node.setPos(rest + self._up * value)
+        self._bundle.forceUpdate()
 
 
 class _Lids:
@@ -410,6 +452,10 @@ class AvatarScene:
             self.actor.pose(self.config["idle_anim"], 0)
             self._bundle.forceUpdate()
 
+        # After the idle pose, so "up" is measured with the head upright.
+        brows = self.config.get("brows")
+        self.brows = _Brows(self.actor, self._bundle, brows) if brows else None
+
         self.prop = self._attach_prop()
 
         self._release_camera()
@@ -552,6 +598,11 @@ class AvatarScene:
     def set_mouth(self, amount: float) -> None:
         """Open the mouth. `amount` is 0 (shut) to 1 (fully open)."""
         self.mouth.set(amount)
+
+    def set_brows(self, amount: float) -> None:
+        """Raise the brows, 0 (rest) to 1. A no-op on a model without them."""
+        if self.brows is not None:
+            self.brows.set(amount)
 
     def idle(self, elapsed: float) -> None:
         """Keep him alive between questions: breathing, head drift, weight.

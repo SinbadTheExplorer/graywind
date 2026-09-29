@@ -69,7 +69,7 @@ class Runtime:
         self._inbox = queue.Queue()
         self._manual_wake = threading.Event()
         self._stopping = threading.Event()
-        self._mouth = None          # (envelope, start) while audio plays
+        self._mouth = None          # (envelope, brows, start) while audio plays
         self._mouth_open = False
         base.taskMgr.add(self._tick, "mavis-runtime")
         base.accept("w", self._manual_wake.set)
@@ -90,11 +90,14 @@ class Runtime:
         self.scene.idle(task.time)
         mouth = self._mouth
         if mouth is not None:
-            env, start = mouth
-            self.scene.set_mouth(lipsync.amount_at(env, time.monotonic() - start))
+            env, brows, start = mouth
+            elapsed = time.monotonic() - start
+            self.scene.set_mouth(lipsync.amount_at(env, elapsed))
+            self.scene.set_brows(lipsync.amount_at(brows, elapsed))
             self._mouth_open = True
         elif self._mouth_open:
             self.scene.set_mouth(0.0)
+            self.scene.set_brows(0.0)
             self._mouth_open = False
         return task.cont
 
@@ -129,7 +132,7 @@ class Runtime:
         samples, rate = read_wav(path)
         env = lipsync.envelope(samples, rate)
         sd.play(samples, rate)
-        self._mouth = (env, time.monotonic())
+        self._mouth = (env, lipsync.emphasis(env), time.monotonic())
         try:
             sd.wait()
         finally:

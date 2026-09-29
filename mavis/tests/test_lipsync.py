@@ -65,3 +65,34 @@ def test_amount_at_closes_the_mouth_past_the_end():
 
 def test_amount_at_on_empty_envelope_is_closed():
     assert lipsync.amount_at(np.array([]), 0.0) == 0.0
+
+
+@pytest.mark.parametrize("n", [0, 1, 7, 60, 1000])
+def test_emphasis_keeps_the_envelope_length(n):
+    env = np.random.default_rng(n).random(n).astype(np.float32)
+    assert lipsync.emphasis(env).shape == env.shape
+
+
+def test_emphasis_is_silent_on_silence():
+    assert not lipsync.emphasis(np.zeros(123, dtype=np.float32)).any()
+
+
+def test_steady_speech_never_raises_the_brows():
+    assert lipsync.emphasis(np.full(600, 0.5, dtype=np.float32)).max() < 0.05
+
+
+def test_a_burst_raises_the_brows_and_they_linger_then_settle():
+    fps = 60
+    env = np.full(6 * fps, 0.3, dtype=np.float32)
+    start, length = (6 * fps - fps // 2) // 2, fps // 2
+    env[start:start + length] = 1.0
+    out = lipsync.emphasis(env, fps=fps)
+    assert out[:fps].max() < 0.05
+    assert out[start:start + int(0.6 * fps)].max() > 0.5
+    end = start + length - 1
+    assert out[end + fps] < out[end]
+
+
+def test_emphasis_stays_in_range():
+    out = lipsync.emphasis(np.random.default_rng(0).random(600).astype(np.float32))
+    assert out.min() >= 0.0 and out.max() <= 1.0

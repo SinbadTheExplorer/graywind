@@ -77,3 +77,42 @@ def test_on_render_gives_up_once_shutting_down():
 
     with pytest.raises(RuntimeError, match="shutting down"):
         runtime.on_render(lambda: None)
+
+
+class FaceScene:
+    def __init__(self):
+        self.mouth, self.brows = [], []
+
+    def idle(self, t):
+        pass
+
+    def set_mouth(self, v):
+        self.mouth.append(v)
+
+    def set_brows(self, v):
+        self.brows.append(v)
+
+
+class _Task:
+    time = 0.0
+    cont = "cont"
+
+
+def test_tick_drives_the_brows_with_the_mouth_and_rests_them_after():
+    """The brows ride the same playback clock as the mouth. Left raised after
+    the answer, he would sit there looking surprised until the next one."""
+    import numpy as np
+    import time
+
+    scene = FaceScene()
+    runtime = app_mod.Runtime(StubBase(), scene, machine=object())
+    runtime._mouth = (np.full(600, 0.4, dtype=np.float32),
+                      np.full(600, 0.7, dtype=np.float32), time.monotonic())
+    runtime._tick(_Task())
+    assert scene.mouth[-1] == pytest.approx(0.4)
+    assert scene.brows[-1] == pytest.approx(0.7)
+
+    runtime._mouth = None
+    runtime._tick(_Task())
+    assert scene.mouth[-1] == 0.0
+    assert scene.brows[-1] == 0.0

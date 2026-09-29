@@ -591,3 +591,23 @@ def test_keanu_lenses_are_see_through(keanu):
              if g.node().isGeomNode()]
     assert glass
     assert all(0.93 * g.getColorScale()[3] <= 0.55 for g in glass)
+
+
+def test_a_model_without_brow_joints_ignores_set_brows(avatar):
+    assert avatar.brows is None
+    avatar.set_brows(1.0)  # must not raise
+
+
+@needs_keanu
+def test_keanu_brows_rise_up_the_face(keanu):
+    """UP, not down: lowering them tucks them behind the glasses frame, and a
+    sign flip in the face-frame vector would pass a moved-at-all test."""
+    joint = keanu.actor.exposeJoint(None, "modelRoot", "l_J_eye_brows_rowA_1_JNT")
+    keanu.set_brows(0.0)
+    keanu._bundle.forceUpdate()
+    rest = joint.getPos(keanu.actor)
+    keanu.set_brows(1.0)
+    raised = joint.getPos(keanu.actor)
+    keanu.set_brows(0.0)
+    assert 0.003 < raised.z - rest.z < 0.005
+    assert abs(raised.x - rest.x) < 0.001

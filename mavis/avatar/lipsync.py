@@ -53,3 +53,44 @@ def amount_at(env: np.ndarray, elapsed: float, fps: int = 60) -> float:
     if index >= len(env):
         return 0.0
     return float(env[index])
+
+
+def emphasis(env: np.ndarray, fps: int = 60, fast: float = 0.25, slow: float = 2.0,
+             lift: float = 1.7, span: float = 0.25, rise: float = 0.12,
+             fall: float = 0.35) -> np.ndarray:
+    """Brow-raise track, 0..1 per frame, from the same envelope as the mouth.
+
+    Fires when he gets louder than his own recent average, not on every
+    syllable -- brows that track loudness directly leave him looking
+    permanently surprised. Rises fast and falls slowly, the way a raised brow
+    lingers a beat after the word. First drafted by the `delegate` model.
+
+    `lift` and `fall` were tuned on his real recorded lines (2026-09-28): at
+    the drafted 1.15/0.5 the brows were up 48% of the time, 44 raises a
+    minute, because pauses drag the recent average down and everything after
+    one reads as emphasis. At 1.7/0.35: up 12%, about 21 a minute.
+    """
+    env = np.asarray(env, dtype=np.float32)
+    if env.size == 0:
+        return env
+
+    def average(x, n):
+        # Edge-padded centred mean; the output length is exact for any n,
+        # including windows longer than the clip.
+        n = max(1, n)
+        head = n // 2
+        padded = np.pad(x, (head, n - 1 - head), mode="edge")
+        return np.convolve(padded, np.ones(n) / n, mode="valid")
+
+    near = average(env, round(fast * fps))
+    recent = average(env, round(slow * fps))
+    raw = np.clip((near - lift * recent) / span, 0.0, 1.0)
+
+    up = 1.0 - np.exp(-1.0 / (fps * rise))
+    down = 1.0 - np.exp(-1.0 / (fps * fall))
+    out = np.empty(raw.size, dtype=np.float32)
+    y = 0.0
+    for i, r in enumerate(raw):
+        y += (r - y) * (up if r > y else down)
+        out[i] = y
+    return np.clip(out, 0.0, 1.0)
