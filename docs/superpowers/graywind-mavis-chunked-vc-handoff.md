@@ -117,16 +117,18 @@ note.
    `lowpowermode 1`. The cost model is therefore measured live per session,
    not hard-coded. `say -v Tom` has a ~1.1s startup floor per call, whatever
    the text length.
-4. **Numbers, battery plus Low Power Mode, 5 questions of 105-191 chars:**
+4. **Numbers, battery plus Low Power Mode**, re-measured on the FINAL code
+   (after the review fixes). 5 questions of 127-199 chars.
+   - **B** runs from the end of speech. That's the criterion's own boundary
+     ("from the end of the question").
+   - **A** runs from `/ask`, where the 15.8s baseline was taken.
 
-   | Setting | A median (from `/ask`) | A worst | Gaps |
+   | Setting | B median / worst | A median / worst | Longest gap |
    |---|---|---|---|
-   | Before this session | 15.8s (9/25, other conditions) | | |
-   | 10 steps (default) | 15.8s | 17.2s | 0 |
-   | `MAVIS_VC_STEPS=6` | **6.0s** | 13.3s | 0.6s total |
+   | 10 steps (default) | 13.5s / 18.8s | 12.0s / 16.9s | 0.9s |
+   | `MAVIS_VC_STEPS=6` | 7.6s / 14.6s | 5.9s / 13.0s | 0.4s |
 
-   B (from the literal end of speech) adds ~1.6-2s: 1.2s of trailing silence
-   plus STT.
+   B = 1.2s of trailing silence + STT + A.
 5. Suite 222 → **273**. Mutation-tested:
    - the break-even merge;
    - the abbreviation fix (the delegate draft never matched "U.S.");
@@ -159,6 +161,10 @@ note.
   - a smarter first cut;
   - an in-process `say` replacement (~1s);
   - streaming the first sentence from Groq.
+- **The cost fit extrapolates low for the 12s and 16s buckets.** Calibration
+  covers 1-8s: live, a 12s bucket took 12.65s against a predicted ~10.7s. No
+  gap showed in the re-run. If one appears after a 12s+ chunk, add a 12s point
+  to `_prewarm`'s calibration (~10s more startup).
 - **Shared gain mostly hits the 0.99 clip guard**, which is close to per-chunk
   peak normalisation (see the `voice_stream.py` docstring). It isn't a
   regression, but it isn't a true loudness match either.
@@ -172,9 +178,10 @@ note.
 1. **Owner: measure on mains.** Plug in, turn Low Power Mode off, and press
    Escape on Johnny. Then, from `mavis/`, run
    `set -a; . ~/.mavis/env; set +a; .venv/bin/python tools/latency_probe.py`.
-   Record the A/B medians and worst cases. If A's median is ≤6s at 10 steps on
-   mains, criterion 2 passes in the owner's normal state (ask which state is
-   normal for them).
+   Record the A and B medians and worst cases. **The criterion's boundary is
+   B** (end of the question). Report both anyway, and let the owner rule on
+   whether A, the baseline's boundary, is acceptable. Ask which power state is
+   normal for them. Don't pre-decide a pass.
 2. **Owner: ear test.** In `~/.mavis/voice-ab/`, compare B (the new default)
    with C (6 steps). If C is acceptable, put `MAVIS_VC_STEPS=6` in
    `~/.mavis/env` and kickstart. That is what gets battery to ~6s median.
