@@ -10,3 +10,4 @@ timestamp,symbol,side,qty,price,reason
 2026-09-08T09:45:57.685753-04:00,AAPL,sell,82.3924,317.53,stop/target exit
 2026-09-24T15:01:29.945231-04:00,AAPL,buy,30.448,337.32,approved via GitHub issue
 2026-09-24T15:31:32.578330-04:00,SERV,buy,1128.5543,4.425,approved via GitHub issue
+2026-09-29T10:31:05.612567-04:00,SERV,sell,1128.5543,4.58,stop/target exit
