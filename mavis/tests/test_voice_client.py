@@ -267,12 +267,15 @@ def test_fit_cost_is_clamped():
     assert voice_client.FIXED_BOUNDS[0] <= fixed <= voice_client.FIXED_BOUNDS[1]
 
 
-def test_the_default_cost_voices_an_answer_whole():
-    """The uncalibrated planner must reproduce the pre-chunking behaviour."""
+def test_the_default_cost_never_splits_off_a_short_first_chunk():
+    """Uncalibrated, the planner must assume slow conversion: nothing short
+    goes first, and no gap is planned."""
     from avatar import chunks
     text = "Gold rises when yields fall, choom. Central banks buy it. So do you."
-    assert chunks.plan(text, fixed=voice_client.DEFAULT_COST[0],
-                       rate=voice_client.DEFAULT_COST[1]) == [text]
+    fixed, rate = voice_client.DEFAULT_COST
+    out = chunks.plan(text, fixed=fixed, rate=rate)
+    assert out[0].startswith("Gold rises when yields fall, choom. Central banks")
+    assert max(chunks.predicted_gaps(out, fixed=fixed, rate=rate), default=0) <= 1.0
 
 
 CALIBRATING_WORKER = textwrap.dedent("""

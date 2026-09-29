@@ -79,6 +79,7 @@ class Runtime:
         self._stopping = threading.Event()
         self._mouth = None          # (envelope, brows, start) while audio plays
         self._mouth_open = False
+        self._answer_fault = None   # a chunk of the current answer lost its voice
         base.taskMgr.add(self._tick, "mavis-runtime")
         base.accept("w", self._manual_wake.set)
         base.accept("escape", base.userExit)
@@ -187,8 +188,13 @@ class Runtime:
                 return False, None
             return True, self.voice.last_gain
 
+        self._answer_fault = None
+
         def degraded():
             reason = self.voice.last_error
+            # Remembered as well as shown: `_settle_notice` runs right after
+            # the first chunk is ready and would otherwise wipe this at once.
+            self._answer_fault = reason
             if reason:
                 try:
                     self.on_render(lambda: self.machine.note_degraded(reason))
@@ -215,6 +221,8 @@ class Runtime:
         """
         if self.voice is not None and self.voice.degraded:
             self.machine.note_degraded(self.voice.last_error or "worker unavailable")
+        elif self._answer_fault:
+            self.machine.note_degraded(self._answer_fault)
         else:
             self.scene.show_notice("")
 
@@ -297,6 +305,7 @@ class Runtime:
                 # which would otherwise skip this cleanup and replace whatever
                 # `say` was propagating with a shutdown error.
                 _discard(stream)
+                self._answer_fault = None   # shown for this answer only
                 try:
                     self.on_render(lambda: self.scene.show_caption(""))
                 except RuntimeError:

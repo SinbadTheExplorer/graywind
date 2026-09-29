@@ -219,3 +219,39 @@ def test_tick_drives_the_brows_with_the_mouth_and_rests_them_after():
     runtime._tick(_Task())
     assert scene.mouth[-1] == 0.0
     assert scene.brows[-1] == 0.0
+
+
+class SettleScene:
+    def __init__(self):
+        self.notices = []
+
+    def show_notice(self, text):
+        self.notices.append(text)
+
+
+def test_a_first_chunk_fault_survives_the_settle_that_follows_it(monkeypatch):
+    """The settle runs right after chunk 0 is ready; it used to wipe the notice
+    a failed chunk 0 had just raised, so he spoke in the wrong voice silently."""
+    voice = FakeVoice(good=0)
+    voice.degraded = False          # one failed call does not condemn the worker
+    machine = NoticeMachine()
+    scene = SettleScene()
+    runtime = app_mod.Runtime(StubBase(), scene, machine=machine, voice=voice)
+    monkeypatch.setattr(runtime, "on_render", lambda fn: fn())
+    monkeypatch.setattr(app_mod.voice_client, "say_to_wav",
+                        lambda t, path: open(path, "wb").write(b"s"))
+    stream = runtime._voice("Short answer, choom.")
+    assert stream.next(timeout=5).endswith("scaffold-0.wav")
+    runtime._settle_notice()
+    assert machine.degraded[-1] == "voice worker did not answer within 120s"
+    assert "" not in scene.notices
+    app_mod._discard(stream)
+
+
+def test_without_a_fault_the_settle_clears_the_notice():
+    scene = SettleScene()
+    runtime = app_mod.Runtime(StubBase(), scene, machine=NoticeMachine(),
+                              voice=FakeVoice(good=9))
+    runtime.voice.degraded = False
+    runtime._settle_notice()
+    assert scene.notices == [""]

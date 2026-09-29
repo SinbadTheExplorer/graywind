@@ -54,8 +54,8 @@ OUTPUT_SAMPLE_RATE = 24000
 
 _EOF = object()
 
-# Before any timing is known: slow enough that the chunk planner voices the
-# answer whole, i.e. exactly the pre-chunking behaviour. Never optimistic.
+# Before any timing is known: slower than realtime, so the chunk planner puts
+# most of the answer in the first chunk and plans no gap. Never optimistic.
 DEFAULT_COST = (2.5, 1.2)
 # Clamp a fitted model to what this hardware can physically do, so one swap
 # storm cannot talk the planner into nonsense.
@@ -65,7 +65,7 @@ TIMING_WINDOW = 12
 
 
 def fit_cost(pairs, default=DEFAULT_COST):
-    """(fixed, rate) with conversion = fixed + rate * audio_seconds.
+    """(fixed, rate) with conversion = fixed + rate * padded (bucket) seconds.
 
     Theil-Sen: the median of pairwise slopes, then the median intercept.
     Medians rather than least squares because single calls here have jumped
@@ -236,8 +236,9 @@ class VoiceClient:
         self.last_gain = message.get("gain")
         # A call that compiled a new bucket measures the compile, not the
         # machine, and would make the planner needlessly pessimistic.
-        if "audio_seconds" in message and not message.get("cold"):
-            self._timings.append((message["audio_seconds"], message["seconds"]))
+        # Keyed on the padded length, which is what the call actually cost.
+        if "bucket_seconds" in message and not message.get("cold"):
+            self._timings.append((message["bucket_seconds"], message["seconds"]))
         return True
 
     def cost_model(self):

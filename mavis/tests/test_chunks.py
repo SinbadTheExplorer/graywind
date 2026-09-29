@@ -119,10 +119,11 @@ def test_nothing_is_lost_reordered_or_duplicated(text):
 
 
 def test_predicted_gaps_follow_back_to_back_conversion():
-    # 10 chars = 0.8s each. fixed=1, rate=1: chunk 0 ready at 1.8, plays to
-    # 2.6; chunk 1 ready at 3.6 -> 1.0s gap.
+    # 10 chars = 0.8s of speech each.
+    # (Priced at the 1s bucket: 1 + 1*1 = 2s each; chunk 0 plays 2.0-2.8,
+    # chunk 1 is ready at 4.0 -> 1.2s gap.)
     assert chunks.predicted_gaps(["a" * 10, "b" * 10], fixed=1.0, rate=1.0) == [
-        pytest.approx(1.0)]
+        pytest.approx(1.2)]
     assert chunks.predicted_gaps(["a" * 50, "b" * 10], fixed=0.5, rate=0.5) == [0.0]
 
 
@@ -131,9 +132,17 @@ ANSWER = ("Gold prices rise when real yields fall, because lower real rates "
           "And the dollar matters, since gold is priced in it.")
 
 
-def test_slower_than_realtime_voices_the_answer_whole():
-    """Battery + Low Power Mode, 2026-09-28: no plan can avoid a long gap."""
-    assert chunks.plan(ANSWER, fixed=2.5, rate=1.2) == [_flat(ANSWER)]
+def test_slower_than_realtime_front_loads_the_answer_without_gaps():
+    """Battery + Low Power Mode, 2026-09-28: nothing short can go first, so
+    the first chunk carries most of the answer and no gap is left."""
+    out = chunks.plan(ANSWER, fixed=2.5, rate=1.2)
+    assert len(out[0]) > len(ANSWER) / 2
+    assert max(chunks.predicted_gaps(out, fixed=2.5, rate=1.2), default=0) <= 1.0
+
+
+def test_when_nothing_can_follow_without_a_gap_the_answer_is_one_chunk():
+    text = "One two three four five six. Seven eight nine ten eleven twelve."
+    assert chunks.plan(text, fixed=9.0, rate=3.0) == [text]
 
 
 def test_fast_conversion_keeps_the_clause_split():
@@ -144,10 +153,39 @@ def test_fast_conversion_keeps_the_clause_split():
 
 def test_a_clause_that_would_leave_a_gap_becomes_the_whole_sentence():
     fixed, rate = 1.5, 0.65
-    clause = chunks._greedy(ANSWER, fixed=fixed, rate=rate, first_max_chars=90,
-                            min_first_chars=20, slack=0.3,
-                            seconds=chunks.spoken_seconds)
-    assert max(chunks.predicted_gaps(clause, fixed=fixed, rate=rate)) > 1.0
+    clause = "Gold prices rise when real yields fall,"
+    rest = chunks._grow(clause, [ANSWER[len(clause) + 1:]], fixed=fixed,
+                        rate=rate, slack=0.3, seconds=chunks.spoken_seconds)
+    assert max(chunks.predicted_gaps([clause] + rest, fixed=fixed, rate=rate)) > 1.0
     out = chunks.plan(ANSWER, fixed=fixed, rate=rate)
     assert out[0].endswith("for everyone.")
     assert max(chunks.predicted_gaps(out, fixed=fixed, rate=rate), default=0) <= 1.0
+
+
+def test_a_tiny_first_sentence_grows_rather_than_voicing_everything():
+    """"Look, choom." cannot cover the next conversion on its own; the fix
+    is a bigger first chunk, not waiting for the whole answer."""
+    text = "Look, choom. " + "The Fed moves first and everyone else follows behind. " * 6
+    out = chunks.plan(text, fixed=0.5, rate=0.3)
+    assert len(out) > 1
+    assert out[0].startswith("Look, choom. The Fed")
+    assert max(chunks.predicted_gaps(out, fixed=0.5, rate=0.3)) <= 1.0
+
+
+def test_buckets_match_the_worker():
+    """The planner prices chunks at the worker's padded lengths; the two
+    lists live in different interpreters, so only a test keeps them equal."""
+    import re
+    from pathlib import Path
+    src = (Path(chunks.__file__).parent.parent / "scripts" / "voice_worker.py").read_text()
+    worker = re.search(r"^BUCKETS = (\(.*\))$", src, re.M).group(1)
+    assert tuple(eval(worker)) == chunks.BUCKETS
+
+
+def test_a_chunk_costs_its_bucket_not_its_length():
+    assert chunks.bucket_seconds(4.1) == 6.0
+    assert chunks.bucket_seconds(8.1) == 12.0
+    assert chunks.bucket_seconds(17) == 32.0
+    gaps = chunks.predicted_gaps(["a" * 30, "b" * 52], fixed=1.0, rate=0.5)
+    # chunk 0: 2.4s -> 3s bucket, ready 2.5, ends 4.9; chunk 1 ready 2.5+4.0=6.5
+    assert gaps == [pytest.approx(1.6)]

@@ -25,12 +25,13 @@ Protocol: one JSON object per line, both directions.
   out:  {"ready": true, "device": "mps", "calibration": [[1, 2.1], [4, 4.0]]}
                                               (once, after load + prewarm)
   out:  {"id": 1, "ok": true, "seconds": 9.2, "gain": 6.1,
-         "audio_seconds": 6.4, "cold": false}
+         "audio_seconds": 6.4, "bucket_seconds": 8.0, "cold": false}
   out:  {"id": 1, "ok": false, "error": "..."}
 """
 import json
 import os
 import sys
+import tempfile
 import time
 
 # Peak level converted speech is scaled to. Just under full scale to leave
@@ -108,8 +109,12 @@ def _trim_prompt(ref_dict, start=PROMPT_START, seconds=PROMPT_SECONDS):
 
     `embedding` (the speaker identity) is left as computed from the full clip.
     """
-    first = int(start * TOKENS_PER_SECOND)
-    count = int(seconds * TOKENS_PER_SECOND)
+    available = ref_dict["prompt_token"].shape[1]
+    count = min(int(seconds * TOKENS_PER_SECOND), available)
+    # Clamped so a reference shorter than start + seconds still yields a full
+    # window instead of an empty prompt, which fails at prewarm and would
+    # leave the whole session on the plain voice.
+    first = max(0, min(int(start * TOKENS_PER_SECOND), available - count))
     tokens = ref_dict["prompt_token"][:, first:first + count]
     if tokens.shape[1] == ref_dict["prompt_token"].shape[1]:
         return ref_dict
@@ -148,13 +153,14 @@ PREWARM_SECONDS = BUCKETS
 def _generate(model, audio):
     """`ChatterboxVC.generate` on 16kHz samples, with CFM_STEPS and bucketing.
 
-    Returns (wav, cold) -- cold when this call compiled a new bucket, so its
-    time says nothing about steady-state speed.
+    Returns (wav, cold, bucket_seconds) -- cold when this call compiled a
+    new bucket, so its time says nothing about steady-state speed.
     """
     with torch.inference_mode():
         real_seconds = len(audio) / S3_SR
         audio = _pad_to_bucket(audio, S3_SR)
         cold = len(audio) not in _WARM
+        bucket = len(audio) / S3_SR
         _WARM.add(len(audio))
         audio = torch.from_numpy(audio).float().to(model.device)[None, ]
         tokens, _ = model.s3gen.tokenizer(audio)
@@ -167,35 +173,40 @@ def _generate(model, audio):
         # Release the allocator's cached activations between calls; what
         # stays resident is the compiled graph per bucket, which is the point.
         torch.mps.empty_cache()
-    return torch.from_numpy(wav).unsqueeze(0), cold
+    return torch.from_numpy(wav).unsqueeze(0), cold, bucket
 
 
 def _convert(model, request):
     started = time.monotonic()
     audio, _ = librosa.load(request["input"], sr=S3_SR)
-    wav, cold = _generate(model, audio)
+    wav, cold, bucket = _generate(model, audio)
     wav, gain = _normalise(wav, request.get("gain"))
     torchaudio.save(request["output"], wav, model.sr)
     return {"seconds": round(time.monotonic() - started, 2), "gain": gain,
-            "audio_seconds": round(wav.shape[-1] / model.sr, 2), "cold": cold}
+            "audio_seconds": round(wav.shape[-1] / model.sr, 2),
+            "bucket_seconds": bucket, "cold": cold}
 
 
 def _prewarm(model):
     """Compile every bucket, then time three of them warm.
 
     Silence has the same shapes as speech of the same length, which is all
-    the compile depends on. The warm timings are (audio seconds, conversion
-    seconds) pairs that seed the client's cost model, so the first answer is
-    planned from how fast this machine is *now* -- Low Power Mode alone moves
-    it about 3x.
+    the compile depends on. The warm timings go through `_convert` itself --
+    file load, save and all -- so they cost what a real request costs, and
+    they seed the client's cost model: the first answer is planned from how
+    fast this machine is *now*. Low Power Mode alone moves it about 3x.
     """
     for seconds in PREWARM_SECONDS:
         _generate(model, np.zeros(seconds * S3_SR, dtype=np.float32))
     pairs = []
-    for seconds in (1, 4, 8):
-        started = time.monotonic()
-        _generate(model, np.zeros(seconds * S3_SR, dtype=np.float32))
-        pairs.append([seconds, round(time.monotonic() - started, 2)])
+    with tempfile.TemporaryDirectory(prefix="mavis-prewarm-") as tmp:
+        for seconds in (1, 4, 8):
+            src = os.path.join(tmp, f"in-{seconds}.wav")
+            silence = torch.zeros(1, seconds * S3_SR - 64)   # stays in-bucket
+            torchaudio.save(src, silence, S3_SR)
+            result = _convert(model, {"input": src,
+                                      "output": os.path.join(tmp, "out.wav")})
+            pairs.append([result["bucket_seconds"], result["seconds"]])
     return pairs
 
 

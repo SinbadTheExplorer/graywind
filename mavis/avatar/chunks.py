@@ -32,6 +32,12 @@ SECONDS_PER_CHAR = 0.08
 # That reads as broken; waiting behind the filler line does not.
 MAX_GAP_SECONDS = 1.0
 
+# Must match `BUCKETS` in scripts/voice_worker.py (a test checks). The worker
+# pads every input up to the next of these lengths, so a chunk costs as much as
+# its bucket, not its own length: a 4.1s chunk costs a 6s conversion. Planning
+# on the real length under-predicted gaps (code review, 2026-09-29).
+BUCKETS = (1, 2, 3, 4, 6, 8, 12, 16)
+
 _ABBREVIATIONS = {"mr.", "mrs.", "ms.", "dr.", "st.", "jr.", "sr.", "inc.",
                   "co.", "vs.", "etc.", "e.g.", "i.e."}
 _INITIALISM = re.compile(r"(?:[A-Za-z]\.){2,}")
@@ -42,6 +48,18 @@ _CLAUSE_BREAKS = ((", ", True), ("; ", True), (": ", True),
 
 def spoken_seconds(text: str) -> float:
     return len(text.strip()) * SECONDS_PER_CHAR
+
+
+def bucket_seconds(seconds: float, buckets=BUCKETS) -> float:
+    """The padded length the worker will actually convert."""
+    for size in buckets:
+        if seconds <= size:
+            return float(size)
+    return float(-(-seconds // buckets[-1]) * buckets[-1])
+
+
+def _cost(text, fixed, rate, seconds):
+    return fixed + rate * bucket_seconds(seconds(text))
 
 
 def _is_abbreviation(token: str) -> bool:
@@ -83,7 +101,7 @@ def predicted_gaps(chunks, *, fixed, rate, seconds=spoken_seconds):
     ready = play_end = 0.0
     gaps = []
     for k, chunk in enumerate(chunks):
-        ready += fixed + rate * seconds(chunk)
+        ready += _cost(chunk, fixed, rate, seconds)
         start = ready if k == 0 else max(ready, play_end)
         if k:
             gaps.append(max(0.0, ready - play_end))
@@ -96,23 +114,32 @@ def plan(text: str, *, fixed: float, rate: float, first_max_chars: int = 90,
          max_gap: float = MAX_GAP_SECONDS, seconds=spoken_seconds) -> list[str]:
     """Chunks whose joined text is the input, sized so playback does not stall.
 
-    Tries a clause-sized first chunk, then a whole first sentence; if every
-    plan is predicted to leave a gap longer than `max_gap`, the answer is one
-    chunk, voiced whole before he starts.
+    The first chunk is the smallest that leaves no gap longer than `max_gap`
+    anywhere after it: a clause of the first sentence, else the first one,
+    two, ... sentences. The last candidate is the whole answer as one chunk,
+    voiced before he starts -- the pre-chunking behaviour, and the answer
+    whenever conversion is too slow for any split to keep up.
     """
-    for split_first in (True, False):
-        chunks = _greedy(text, fixed=fixed, rate=rate, slack=slack,
-                         first_max_chars=first_max_chars if split_first else 10**9,
-                         min_first_chars=min_first_chars, seconds=seconds)
+    sentences = split_sentences(text)
+    if not sentences:
+        return []
+    candidates = []
+    head, tail = _split_first(sentences[0], first_max_chars, min_first_chars)
+    if tail:
+        candidates.append((head, [tail] + sentences[1:]))
+    for k in range(1, len(sentences) + 1):
+        candidates.append((" ".join(sentences[:k]), sentences[k:]))
+    for first, rest in candidates:
+        chunks = [first] + _grow(first, rest, fixed=fixed, rate=rate,
+                                 slack=slack, seconds=seconds)
         gaps = predicted_gaps(chunks, fixed=fixed, rate=rate, seconds=seconds)
         if not gaps or max(gaps) <= max_gap:
             return chunks
-    whole = " ".join(text.split())
-    return [whole] if whole else []
+    return chunks   # unreachable: the last candidate has no gaps
 
 
-def _greedy(text, *, fixed, rate, first_max_chars, min_first_chars, slack, seconds):
-    """Short first chunk, then each chunk as large as the gap bound allows.
+def _grow(first, queue, *, fixed, rate, slack, seconds):
+    """After `first`, each chunk as large as the gap bound allows.
 
     A single sentence too long for the bound still becomes one chunk: a pause
     before it is better than cutting a sentence mid-phrase.
@@ -123,23 +150,19 @@ def _greedy(text, *, fixed, rate, first_max_chars, min_first_chars, slack, secon
     followed without a gap, so sentence-sized chunks would stall at *every*
     boundary; taking the one gap with a bigger chunk lets the rest run clean.
     """
-    sentences = split_sentences(text)
-    if not sentences:
-        return []
-    head, tail = _split_first(sentences[0], first_max_chars, min_first_chars)
-    queue = ([tail] if tail else []) + sentences[1:]
     break_even = fixed / (1.0 - rate) if rate < 1.0 else float("inf")
-    chunks = [head]
+    chunks, previous = [], first
     i = 0
     while i < len(queue):
-        budget = seconds(chunks[-1]) + slack
+        budget = seconds(previous) + slack
         chunk, i = queue[i], i + 1
-        stalls = fixed + rate * seconds(chunk) > budget
+        stalls = _cost(chunk, fixed, rate, seconds) > budget
         while i < len(queue):
             candidate = f"{chunk} {queue[i]}"
-            fits = fixed + rate * seconds(candidate) <= budget
+            fits = _cost(candidate, fixed, rate, seconds) <= budget
             if not (fits or (stalls and seconds(chunk) < break_even)):
                 break
             chunk, i = candidate, i + 1
         chunks.append(chunk)
+        previous = chunk
     return chunks

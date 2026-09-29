@@ -23,8 +23,9 @@ owner-approved 2026-09-28.
 ## How to resume (do this first)
 
 1. `cd ~/Projects/graywind-johnny`: the pinned worktree on `feat/mavis-avatar`.
-   `git log --oneline -3` should show this session's commit on top of `7fb1b73`.
-2. `cd mavis && .venv/bin/python -m pytest -q` should report **267 passed**.
+   `git log --oneline -3` should show this session's two commits (the chunked
+   VC commit and its code-review fixes) on top of `7fb1b73`.
+2. `cd mavis && .venv/bin/python -m pytest -q` should report **273 passed**.
 3. Ask the owner the two questions in What's next #1 and #2. Nothing else on
    criterion 2 moves without them.
 4. **Immediate next action:** have the owner plug in, turn Low Power Mode off,
@@ -126,10 +127,23 @@ note.
 
    B (from the literal end of speech) adds ~1.6-2s: 1.2s of trailing silence
    plus STT.
-5. Suite 222 → **267**. Mutation-tested:
+5. Suite 222 → **273**. Mutation-tested:
    - the break-even merge;
    - the abbreviation fix (the delegate draft never matched "U.S.");
    - the cost-model wiring in `_voice`.
+
+6. **Code-review fixes (second commit).**
+   - The planner and cost model now price a chunk at its padded bucket, not
+     its real length. A 4.1s chunk costs a 6s conversion, and the old pricing
+     under-predicted gaps.
+   - Calibration is timed through `_convert` itself.
+   - A failed chunk 0 keeps its "voice degraded" notice. The settle used to
+     wipe it, both before and after this work.
+   - A reference clip shorter than 10s gets a clamped prompt window instead of
+     an empty one.
+   - When the first sentence is too short to cover the next conversion
+     ("Look, choom."), the planner grows the first chunk sentence by sentence
+     instead of voicing the whole answer.
 
 ## What has failed / risks / caveats
 
@@ -174,7 +188,7 @@ note.
 
 ## Verification idioms used in this project (for the resuming session)
 
-- **Suite:** `cd mavis && .venv/bin/python -m pytest -q` should report 267.
+- **Suite:** `cd mavis && .venv/bin/python -m pytest -q` should report 273.
 - **Real worker without the app:** construct `avatar.voice_client.VoiceClient()`,
   then `.start()`, `.convert(src, out)`, `.cost_model()`. Sample memory with
   `top -l 1 -pid <pid> -stats mem`. Run with the avatar stopped.
