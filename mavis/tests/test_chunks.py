@@ -39,10 +39,36 @@ LONG_FIRST = ("When the Fed hikes rates, mortgage costs follow within weeks, and
               "home sales cool off right behind them before anyone notices. Next.")
 
 
-def test_long_first_sentence_splits_at_the_last_clause_break_in_bounds():
+def test_long_first_sentence_splits_at_the_shortest_clause_that_fits():
     out = chunks.plan(LONG_FIRST, fixed=0, rate=0)
-    assert out[0] == "When the Fed hikes rates, mortgage costs follow within weeks,"
+    assert out[0] == "When the Fed hikes rates,"
     assert _flat(" ".join(out)) == _flat(LONG_FIRST)
+
+
+def test_a_longer_clause_is_used_when_the_shortest_would_leave_a_gap():
+    """Head 1 (25 chars, 2.0s) cannot cover the next conversion; head 2 can."""
+    out = chunks.plan(LONG_FIRST, fixed=2.0, rate=0.3, slack=0.3)
+    assert out[0] == "When the Fed hikes rates, mortgage costs follow within weeks,"
+    assert max(chunks.predicted_gaps(out, fixed=2.0, rate=0.3)) <= chunks.MAX_GAP_SECONDS
+
+
+def test_pieces_rejoin_to_the_text_and_cut_only_the_first_sentence():
+    text = "A, b -- c; d. E, f.  G."
+    assert chunks.pieces(text) == ["A,", "b", "-- c;", "d.", "E, f.", "G."]
+    assert " ".join(chunks.pieces(text)) == _flat(text)
+
+
+def test_measured_seconds_sums_consecutive_pieces_plus_joins():
+    parts = ["One,", "two.", "Three."]
+    seconds = chunks.measured_seconds(parts, [1.0, 2.0, 4.0])
+    assert seconds("One,") == 1.0
+    assert seconds("two. Three.") == pytest.approx(6.0 + chunks.JOIN_SECONDS)
+    assert seconds("One, two. Three.") == pytest.approx(7.0 + 2 * chunks.JOIN_SECONDS)
+    assert seconds("Three. One,") == chunks.spoken_seconds("Three. One,")   # not consecutive
+
+
+def test_a_measured_zero_is_not_replaced_by_the_estimate():
+    assert chunks.measured_seconds(["Hm."], [0.0])("Hm.") == 0.0
 
 
 def test_first_sentence_without_a_usable_break_stays_whole():

@@ -38,6 +38,11 @@ MAX_GAP_SECONDS = 1.0
 # on the real length under-predicted gaps (code review, 2026-09-29).
 BUCKETS = (1, 2, 3, 4, 6, 8, 12, 16)
 
+# Measured 2026-09-30 through the warm Tom helper: two pieces spoken as one
+# utterance last the sum of their separate durations plus ~0.2s (5 of 5
+# sentence joins at +0.19-0.20s, clause joins +0.15-0.25s).
+JOIN_SECONDS = 0.2
+
 _ABBREVIATIONS = {"mr.", "mrs.", "ms.", "dr.", "st.", "jr.", "sr.", "inc.",
                   "co.", "vs.", "etc.", "e.g.", "i.e."}
 _INITIALISM = re.compile(r"(?:[A-Za-z]\.){2,}")
@@ -80,19 +85,48 @@ def split_sentences(text: str) -> list[str]:
     return [s for s in sentences if s]
 
 
-def _split_first(sentence: str, max_chars: int, min_chars: int):
-    """(head, tail) at the last clause break that keeps the head in bounds."""
-    if len(sentence) <= max_chars:
-        return sentence, None
-    best = None
-    for delim, keep in _CLAUSE_BREAKS:
-        for match in re.finditer(re.escape(delim), sentence):
-            cut = match.end() if keep else match.start()
-            if min_chars <= cut <= max_chars and (best is None or cut > best):
-                best = cut
-    if best is None:
-        return sentence, None
-    return sentence[:best].strip(), sentence[best:].strip()
+def pieces(text: str) -> list[str]:
+    """What gets measured: the first sentence cut at every clause break (the
+    planner's only mid-sentence cut points), then each later sentence whole.
+
+    ' '.join(pieces(text)) == the text with its whitespace collapsed.
+    """
+    sentences = split_sentences(text)
+    if not sentences:
+        return []
+    first = sentences[0]
+    cuts = sorted({match.end() if keep else match.start()
+                   for delim, keep in _CLAUSE_BREAKS
+                   for match in re.finditer(re.escape(delim), first)})
+    segments, start = [], 0
+    for cut in cuts + [len(first)]:
+        if segment := first[start:cut].strip():
+            segments.append(segment)
+        start = cut
+    return segments + sentences[1:]
+
+
+def measured_seconds(pieces_list, durations):
+    """`seconds(text)` from measured piece durations instead of characters.
+
+    `spoken_seconds` is off by -30% to +40% on real answers (0.052-0.112
+    s/char, 2026-09-30): numbers and acronyms ("~1.9%", "10-yr") run long, plain
+    prose runs short. That put 22 of 40 planned chunks in the wrong bucket,
+    and an under-priced 12s conversion is exactly a mid-answer pause. A chunk
+    made of consecutive pieces is their sum plus JOIN_SECONDS per join; any
+    other text falls back to the estimate.
+    """
+    lookup = {}
+    for i in range(len(pieces_list)):
+        total = 0.0
+        for j in range(i, len(pieces_list)):
+            total += durations[j] + (JOIN_SECONDS if j > i else 0.0)
+            lookup.setdefault(" ".join(pieces_list[i:j + 1]), total)
+
+    def seconds(text):
+        known = lookup.get(text.strip())
+        return spoken_seconds(text) if known is None else known
+    return seconds
 
 
 def predicted_gaps(chunks, *, fixed, rate, seconds=spoken_seconds):
@@ -114,9 +148,13 @@ def plan(text: str, *, fixed: float, rate: float, first_max_chars: int = 90,
          max_gap: float = MAX_GAP_SECONDS, seconds=spoken_seconds) -> list[str]:
     """Chunks whose joined text is the input, sized so playback does not stall.
 
-    The first chunk is the smallest that leaves no gap longer than `max_gap`
-    anywhere after it: a clause of the first sentence, else the first one,
-    two, ... sentences. The last candidate is the whole answer as one chunk,
+    The first chunk is the SHORTEST candidate that leaves no gap longer than
+    `max_gap` anywhere after it: the shortest clause head of the first
+    sentence, else the first one, two, ... sentences. (Before 2026-09-30 only
+    the longest head under `first_max_chars` was tried, so a short clause that
+    would have fit was never offered.) Cuts are at punctuation only: a cut
+    before a bare "since" or "which" would likely take sentence-final
+    intonation, and that needs an ear test before it ships. The last candidate is the whole answer as one chunk,
     voiced before he starts -- the pre-chunking behaviour, and the answer
     whenever conversion is too slow for any split to keep up.
     """
@@ -124,9 +162,11 @@ def plan(text: str, *, fixed: float, rate: float, first_max_chars: int = 90,
     if not sentences:
         return []
     candidates = []
-    head, tail = _split_first(sentences[0], first_max_chars, min_first_chars)
-    if tail:
-        candidates.append((head, [tail] + sentences[1:]))
+    segments = pieces(sentences[0])
+    for j in range(1, len(segments)):
+        head = " ".join(segments[:j])
+        if min_first_chars <= len(head) <= first_max_chars:
+            candidates.append((head, [" ".join(segments[j:])] + sentences[1:]))
     for k in range(1, len(sentences) + 1):
         candidates.append((" ".join(sentences[:k]), sentences[k:]))
     for first, rest in candidates:

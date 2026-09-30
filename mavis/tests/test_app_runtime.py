@@ -255,3 +255,78 @@ def test_without_a_fault_the_settle_clears_the_notice():
     runtime.voice.degraded = False
     runtime._settle_notice()
     assert scene.notices == [""]
+
+
+def _tone_wav(path, seconds):
+    from scipy.io import wavfile
+    import numpy as np
+    wavfile.write(path, 22050, np.full(int(seconds * 22050), 0.1, dtype=np.float32))
+
+
+def test_measure_plans_on_spoken_durations_and_reuses_the_first_piece(monkeypatch, tmp_path):
+    """Two sentences of equal length, one spoken 4x slower (think "~1.9%"):
+    the planner must see that, and chunk 0's scaffold must not be spoken twice."""
+    spoken = []
+
+    def fake_say(text, path):
+        spoken.append(text)
+        _tone_wav(path, 8.0 if "Slow" in text else 2.0)
+    monkeypatch.setattr(app_mod.voice_client, "speaker_ready", lambda: True)
+    monkeypatch.setattr(app_mod.voice_client, "say_to_wav", fake_say)
+    seconds, scaffold = app_mod._measure("Fast one here. Slow one here.", str(tmp_path))
+    assert seconds("Fast one here.") == 2.0
+    assert seconds("Slow one here.") == 8.0
+    assert spoken == ["Fast one here.", "Slow one here."]
+    scaffold("Fast one here.", str(tmp_path / "scaffold-0.wav"))
+    scaffold("Fast one here. Slow one here.", str(tmp_path / "scaffold-1.wav"))
+    assert spoken[2:] == ["Fast one here. Slow one here."]     # only the merged one
+    assert (tmp_path / "scaffold-0.wav").stat().st_size > 1000
+
+
+def test_measure_uses_the_estimate_when_the_speaker_is_down(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_mod.voice_client, "speaker_ready", lambda: False)
+    seconds, scaffold = app_mod._measure("Anything at all.", str(tmp_path))
+    assert seconds is app_mod.chunks.spoken_seconds
+    assert scaffold is app_mod.voice_client.say_to_wav
+
+
+def test_measure_falls_back_when_measuring_fails(monkeypatch, tmp_path):
+    def broken(text, path):
+        raise OSError("helper died and say too")
+    monkeypatch.setattr(app_mod.voice_client, "speaker_ready", lambda: True)
+    monkeypatch.setattr(app_mod.voice_client, "say_to_wav", broken)
+    seconds, _ = app_mod._measure("Anything at all.", str(tmp_path))
+    assert seconds is app_mod.chunks.spoken_seconds
+
+
+def test_voice_plans_with_the_measured_durations(monkeypatch):
+    seen = {}
+    real_plan = app_mod.chunks.plan
+
+    def spy(text, **kwargs):
+        seen["seconds"] = kwargs.get("seconds")
+        return real_plan(text, **kwargs)
+    monkeypatch.setattr(app_mod.chunks, "plan", spy)
+    monkeypatch.setattr(app_mod.voice_client, "speaker_ready", lambda: True)
+    monkeypatch.setattr(app_mod.voice_client, "say_to_wav",
+                        lambda t, path: _tone_wav(path, 3.0))
+    runtime = app_mod.Runtime(StubBase(), CaptionScene(), machine=NoticeMachine(),
+                              voice=FakeVoice(good=99))
+    monkeypatch.setattr(runtime, "on_render", lambda fn: fn())
+    stream = runtime._voice("One sentence here. Another one here.")
+    while stream.next(timeout=5) is not None:
+        pass
+    app_mod._discard(stream)
+    assert seen["seconds"]("One sentence here.") == 3.0
+
+
+def test_measure_stops_at_once_when_the_speaker_dies_mid_answer(monkeypatch, tmp_path):
+    """The rest must not be measured at `say` speed (~1.2s a piece)."""
+    ready = iter([True, True, False])
+    spoken = []
+    monkeypatch.setattr(app_mod.voice_client, "speaker_ready", lambda: next(ready, False))
+    monkeypatch.setattr(app_mod.voice_client, "say_to_wav",
+                        lambda t, path: (spoken.append(t), _tone_wav(path, 1.0)))
+    seconds, _ = app_mod._measure("One. Two. Three. Four.", str(tmp_path))
+    assert seconds is app_mod.chunks.spoken_seconds
+    assert spoken == ["One."]

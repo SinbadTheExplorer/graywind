@@ -61,6 +61,40 @@ def has_speech(samples: np.ndarray) -> bool:
     return bool((np.sqrt(np.mean(np.square(blocks), axis=1)) >= capture.SILENCE_RMS).any())
 
 
+def _measure(text: str, workdir: str):
+    """(seconds, scaffold) for planning and voicing `text`.
+
+    With the warm Tom helper up, every piece the planner can cut at is spoken
+    once (~0.2s for a whole answer) and the plan runs on real durations; a
+    chunk that is exactly one of those pieces -- usually chunk 0 -- reuses its
+    file instead of being spoken again. Without the helper that would be
+    ~1.2s of `say` per piece, so the character estimate is used instead.
+    """
+    if not voice_client.speaker_ready():
+        return chunks.spoken_seconds, voice_client.say_to_wav
+    measured, durations = {}, []
+    pieces = chunks.pieces(text)
+    try:
+        for i, piece in enumerate(pieces):
+            if not voice_client.speaker_ready():
+                # Died mid-answer: the rest would be measured at `say` speed.
+                return chunks.spoken_seconds, voice_client.say_to_wav
+            path = os.path.join(workdir, f"piece-{i}.wav")
+            voice_client.say_to_wav(piece, path)
+            samples, rate = read_wav(path)
+            durations.append(len(samples) / rate)
+            measured.setdefault(piece, path)
+    except Exception:  # noqa: BLE001 - planning on estimates beats not answering
+        return chunks.spoken_seconds, voice_client.say_to_wav
+
+    def scaffold(chunk, path):
+        if chunk in measured:
+            shutil.copyfile(measured[chunk], path)
+        else:
+            voice_client.say_to_wav(chunk, path)
+    return chunks.measured_seconds(pieces, durations), scaffold
+
+
 def _discard(stream) -> None:
     """Stop producing an answer's audio and delete its files. Cannot raise."""
     stream.cancel()
@@ -181,7 +215,8 @@ class Runtime:
         workdir = tempfile.mkdtemp(prefix="mavis-")
         fixed, rate = (self.voice.cost_model() if self.voice is not None
                        else voice_client.DEFAULT_COST)
-        parts = chunks.plan(text, fixed=fixed, rate=rate)
+        seconds, scaffold = _measure(text, workdir)
+        parts = chunks.plan(text, fixed=fixed, rate=rate, seconds=seconds)
 
         def convert(src, out, gain):
             if self.voice is None or not self.voice.convert(src, out, gain=gain):
@@ -201,7 +236,7 @@ class Runtime:
                 except RuntimeError:
                     pass    # shutting down; nothing left to show it on
 
-        stream = VoiceStream(parts, workdir, scaffold=voice_client.say_to_wav,
+        stream = VoiceStream(parts, workdir, scaffold=scaffold,
                              convert=convert,
                              on_degraded=degraded if self.voice else None)
         return stream.start()
@@ -236,7 +271,8 @@ class Runtime:
         answer = await brain.ask(question)
         if not answer:
             raise brain.BrainError("the backend returned an empty answer")
-        stream = self._voice(answer)
+        # Off the event loop: measuring the answer runs the speech helper.
+        stream = await asyncio.to_thread(self._voice, answer)
         try:
             first = await asyncio.to_thread(stream.next)
         except BaseException:
@@ -374,12 +410,16 @@ def main() -> int:
         print(f"{exc}\nPress W in the window to wake him.", file=sys.stderr)
 
     runtime = Runtime(base, scene, machine, voice=voice, listener=listener)
+    # Alongside the voice worker's much longer warm-up; `say` covers until then.
+    threading.Thread(target=voice_client.start_speaker, name="mavis-speaker",
+                     daemon=True).start()
     runtime.start()
     try:
         base.run()
     finally:
         runtime.stop()
         voice.stop()
+        voice_client.stop_speaker()
     return 0
 
 

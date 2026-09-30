@@ -15,12 +15,20 @@ Boundary B (the owner's stopwatch):    end of speech -> first chunk playable
 Playback is simulated from each chunk's ready time and duration, so gaps
 between chunks are measured, not assumed.
 """
-import asyncio, os, sys, time, statistics, subprocess, tempfile
+import asyncio, json, os, sys, time, statistics, subprocess, tempfile
 sys.path.insert(0, os.getcwd())
 from avatar import app as app_mod, brain, capture, stt, voice_client
 from avatar.app import read_wav
 
-QUESTIONS = sys.argv[1:] or [
+# --answers FILE: a JSON list of answer texts voiced as-is, skipping mic, STT
+# and /ask, so two builds can be compared on identical input. Groq's /ask time
+# alone ranged 0.8-5.2s between runs (2026-09-29) and drowned the difference.
+ANSWERS = None
+if "--answers" in sys.argv:
+    i = sys.argv.index("--answers")
+    ANSWERS = json.load(open(sys.argv[i + 1]))
+    del sys.argv[i:i + 2]
+QUESTIONS = [a for a in sys.argv[1:] if not a.startswith("--")] or [
     "What happens to gold when real yields fall?",
     "How does the Fed affect mortgage rates?",
     "Why do credit spreads widen in a panic?",
@@ -46,6 +54,8 @@ def spoken(q, path):
 async def main():
     vc = voice_client.VoiceClient()
     t = time.monotonic(); vc.start(); print(f"warm-up {time.monotonic()-t:.1f}s ready={vc.ready} {vc.last_error or ''}")
+    if "--say" not in sys.argv:
+        print(f"scaffold speaker up={voice_client.start_speaker()}")
     rt = app_mod.Runtime(Base(), object(), Machine(), voice=vc)
     rt.on_render = lambda fn: fn()
     real_say, real_conv = voice_client.say_to_wav, vc.convert
@@ -55,13 +65,16 @@ async def main():
         t = time.monotonic(); ok = real_conv(i, o, **k); print(f"    vc   {time.monotonic()-t:4.1f}s {os.path.basename(o)}"); return ok
     voice_client.say_to_wav = say_t; vc.convert = conv_t
     A, B, stalls_all = [], [], []
-    for q in QUESTIONS:
-        with tempfile.TemporaryDirectory() as d:
-            samples = spoken(q, os.path.join(d, "q.wav"))
-        t_stt = time.monotonic(); heard = await stt.transcribe(samples, 16000); stt_s = time.monotonic() - t_stt
-        t0 = time.monotonic()
-        answer = await brain.ask(heard)
-        ask_s = time.monotonic() - t0
+    for q in (ANSWERS or QUESTIONS):
+        if ANSWERS:
+            stt_s, ask_s, answer, t0 = 0.0, 0.0, q, time.monotonic()
+        else:
+            with tempfile.TemporaryDirectory() as d:
+                samples = spoken(q, os.path.join(d, "q.wav"))
+            t_stt = time.monotonic(); heard = await stt.transcribe(samples, 16000); stt_s = time.monotonic() - t_stt
+            t0 = time.monotonic()
+            answer = await brain.ask(heard)
+            ask_s = time.monotonic() - t0
         print(f"    cost model F={vc.cost_model()[0]:.2f} r={vc.cost_model()[1]:.2f}")
         stream = rt._voice(answer)
         ready, durs = [], []
@@ -76,11 +89,11 @@ async def main():
             play = max(ready[k], end_prev)
             stalls.append(max(0.0, ready[k] - end_prev))
         # The filler starts with /ask and must finish before the answer can.
-        a = max(ready[0], FILLER_WORST); b = capture_silence + stt_s + a
+        a = max(ready[0], 0.0 if ANSWERS else FILLER_WORST); b = capture_silence + stt_s + a
         A.append(a); B.append(b); stalls_all += stalls
         print(f"{len(answer):3d} chars {parts} chunks | stt {stt_s:.1f} ask {ask_s:.1f} first-chunk-voiced {a - ask_s:.1f} "
               f"| A={a:.1f}s B={b:.1f}s | gaps {[round(x,1) for x in stalls]} | audio {sum(durs):.1f}s")
-    vc.stop()
+    vc.stop(); voice_client.stop_speaker()
     print(f"A (baseline boundary): median {statistics.median(A):.1f}s worst {max(A):.1f}s")
     print(f"B (end of speech):     median {statistics.median(B):.1f}s worst {max(B):.1f}s")
     print(f"gaps: total {sum(stalls_all):.1f}s max {max(stalls_all, default=0):.1f}s")

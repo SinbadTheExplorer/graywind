@@ -17,10 +17,12 @@ answering the previous request. The worker also redirects library output away
 from stdout; this is the second half of that defence.
 """
 import collections
+import hashlib
 import json
 import os
 import queue
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -87,8 +89,180 @@ def _median(values):
     return values[mid] if len(values) % 2 else (values[mid - 1] + values[mid]) / 2
 
 
+SPEAKER_SOURCE = str(Path(__file__).resolve().parent.parent / "scripts"
+                     / "scaffold_speaker.swift")
+SPEAKER_BIN_DIR = str(Path.home() / ".mavis" / "bin")
+SPEAKER_VOICE = "com.apple.voice.enhanced.en-US.Tom"
+# A first build is ~5s; a scaffold is ~0.1s. Past either, `say` is used.
+SPEAKER_BUILD_TIMEOUT = 300.0
+SPEAKER_READY_TIMEOUT = 30.0
+SPEAKER_RENDER_TIMEOUT = 10.0
+
+
+class ScaffoldSpeaker:
+    """`scripts/scaffold_speaker.swift`, kept running with Tom loaded.
+
+    `say` pays ~1.2s of voice loading on every call, and the first chunk's
+    scaffold sits directly in time-to-first-word; the warm helper writes the
+    same samples in ~0.1s (identical output, checked 2026-09-30). Any failure
+    -- no compiler, missing voice, a timeout, a mismatched reply -- turns it
+    off for the session and `say_to_wav` goes back to `say`. Slower, never
+    silent.
+    """
+
+    def __init__(self, source=SPEAKER_SOURCE, binary=None,
+                 voice=SPEAKER_VOICE, render_timeout=SPEAKER_RENDER_TIMEOUT):
+        self.source, self.binary, self.voice = source, binary, voice
+        self.render_timeout = render_timeout
+        self.proc = None
+        self.ready = False
+        self.last_error = None
+        self._next_id = 0
+        self._lock = threading.Lock()
+        self._messages = queue.Queue()
+        self._stopped = threading.Event()
+
+    def _build(self):
+        """Compile unless a binary built from exactly this source exists.
+
+        Named by the source's hash rather than compared by mtime: every
+        worktree shares ~/.mavis/bin, and an mtime check would run whichever
+        checkout built last, protocol mismatch and all.
+        """
+        if self.binary is None:
+            with open(self.source, "rb") as f:
+                digest = hashlib.sha256(f.read()).hexdigest()[:12]
+            self.binary = os.path.join(SPEAKER_BIN_DIR, f"scaffold_speaker-{digest}")
+        if os.path.exists(self.binary):
+            return
+        os.makedirs(os.path.dirname(self.binary), exist_ok=True)
+        partial = f"{self.binary}.{os.getpid()}.partial"
+        try:
+            subprocess.run(["swiftc", "-O", "-suppress-warnings", self.source,
+                            "-o", partial], check=True, capture_output=True,
+                           timeout=SPEAKER_BUILD_TIMEOUT)
+            os.replace(partial, self.binary)    # never a half-written binary
+        finally:
+            if os.path.exists(partial):
+                os.remove(partial)
+
+    def _drain(self, stream):
+        for line in stream:
+            self._messages.put(line)
+        self._messages.put(_EOF)
+
+    def _next_message(self, timeout):
+        deadline = time.monotonic() + timeout
+        while (remaining := deadline - time.monotonic()) > 0:
+            try:
+                line = self._messages.get(timeout=remaining)
+            except queue.Empty:
+                return None
+            if line is _EOF:
+                return None
+            try:
+                return json.loads(line)
+            except ValueError:
+                continue
+        return None
+
+    def start(self, ready_timeout=SPEAKER_READY_TIMEOUT) -> bool:
+        # Runs on its own thread; Escape during a first build must not leave a
+        # helper launched after stop() has already run. One start per session.
+        try:
+            self._build()
+            if self._stopped.is_set():
+                return False
+            self.proc = subprocess.Popen(
+                [self.binary, self.voice], stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                text=True, bufsize=1)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return self._fail(f"could not start: {exc}")
+        threading.Thread(target=self._drain, args=(self.proc.stdout,),
+                         daemon=True).start()
+        message = self._next_message(ready_timeout)
+        if not (message and message.get("ready")):
+            detail = (message or {}).get("error", "no ready message")
+            return self._fail(f"not ready: {detail}")
+        self.ready = True
+        # stop() sets _stopped before clearing `ready`; checking after setting
+        # it means an Escape landing in between still ends with ready False.
+        if self._stopped.is_set():
+            self.stop()
+            return False
+        return True
+
+    def render(self, text: str, path: str) -> bool:
+        """True if `path` now holds the scaffold; False means use `say`."""
+        proc = self.proc    # stop() may clear it from another thread
+        if not self.ready or proc is None:
+            return False
+        with self._lock:
+            self._next_id += 1
+            request_id = self._next_id
+            try:
+                proc.stdin.write(json.dumps(
+                    {"id": request_id, "text": text, "path": path}) + "\n")
+                proc.stdin.flush()
+            except (OSError, ValueError) as exc:
+                return self._fail(f"pipe broke: {exc}")
+            message = self._next_message(self.render_timeout)
+        if message is None or message.get("id") != request_id:
+            # A late reply would answer the next request, so no next request.
+            return self._fail("no reply" if message is None else "reply out of step")
+        if not message.get("ok"):
+            # One bad utterance says nothing about the helper; `say` gets it.
+            self.last_error = message.get("error")
+            return False
+        return True
+
+    def _fail(self, reason: str) -> bool:
+        if self.last_error is None or self.ready:
+            print(f"scaffold speaker off, using `say`: {reason}", file=sys.stderr)
+        self.ready = False
+        self.last_error = reason
+        self.stop()
+        return False
+
+    def stop(self) -> None:
+        self._stopped.set()
+        self.ready = False
+        proc, self.proc = self.proc, None
+        if proc is None:
+            return
+        try:
+            proc.stdin.close()      # EOF: the helper's loop exits on its own
+            proc.wait(timeout=STOP_TIMEOUT)
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            proc.kill()
+
+
+_speaker = ScaffoldSpeaker()
+
+
+def start_speaker() -> bool:
+    """Bring up the warm scaffold helper. Until this succeeds, `say` is used."""
+    return _speaker.start()
+
+
+def speaker_ready() -> bool:
+    """Scaffolds cost ~0.1s, so measuring an answer before planning is cheap."""
+    return _speaker.ready
+
+
+def stop_speaker() -> None:
+    _speaker.stop()
+
+
 def say_to_wav(text: str, path: str) -> None:
-    """macOS `say` scaffold that ChatterboxVC re-colours into Johnny."""
+    """Tom-voiced scaffold that ChatterboxVC re-colours into Johnny.
+
+    Through the warm helper when it is up, else macOS `say` -- same voice,
+    same format, same samples.
+    """
+    if _speaker.render(text, path):
+        return
     subprocess.run(
         ["say", "-v", "Tom", "-o", path, "--data-format=LEF32@22050", text],
         check=True,
