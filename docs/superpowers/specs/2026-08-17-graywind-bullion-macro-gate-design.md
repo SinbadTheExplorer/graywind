@@ -19,7 +19,7 @@ gate wrappers and `decide_trade`'s `gates_always_pass` bypass this design joins)
 ## Goal
 
 Graywind currently reads a single macro signal directly (`vix_gate.py` hits FRED for VIXCLS).
-[[Bullion]] (a sibling side project — `/Users/thanhnguyen/minhthanh0403/claude-projects/claudekit`)
+[[Bullion]] (a sibling side project — `~/claude-projects/claudekit`)
 already computes and publishes a richer, already-fitted macro dataset (VIX, NFCI, credit spreads,
 yield curve, and more) on a daily cron, free and public on GitHub Pages. This design adds a 4th
 gate, `macro_gate.py`, that reads Bullion's public `data.json` as a vote-count risk gate —

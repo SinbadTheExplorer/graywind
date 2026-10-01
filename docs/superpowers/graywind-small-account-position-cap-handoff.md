@@ -141,8 +141,8 @@ pre-existing tracks.
   ```
 - Live public dashboard: `https://sinbadtheexplorer.github.io/graywind/`.
 - This worktree's sandbox cannot run git commands against the main checkout
-  (`/Users/thanhnguyen/Projects/graywind`) — any `git -C <path-outside-this-worktree>` or `cd`
-  out of `/Users/thanhnguyen/Projects/graywind/.claude/worktrees/graywind-yahoo-analyst-consensus`
+  (`~/Projects/graywind`) — any `git -C <path-outside-this-worktree>` or `cd`
+  out of `~/Projects/graywind/.claude/worktrees/graywind-yahoo-analyst-consensus`
   is refused. Local-merge-to-main is not possible from a session running in this worktree; push
   + PR is the only integration path available from here.
 - Project follows TDD (red/green) for any `gates/`/`pipeline.py`/`strategy_engine.py`/

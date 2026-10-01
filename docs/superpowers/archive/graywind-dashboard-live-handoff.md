@@ -20,8 +20,8 @@ unverified, and a fresh visual-design ask just added on top.
 
 ## How to resume (do this first)
 
-1. Confirm state: `git -C /Users/thanhnguyen/Projects/graywind rev-parse --abbrev-ref HEAD`
-   should say `main`; `git -C /Users/thanhnguyen/Projects/graywind log --oneline -1` should
+1. Confirm state: `git -C ~/Projects/graywind rev-parse --abbrev-ref HEAD`
+   should say `main`; `git -C ~/Projects/graywind log --oneline -1` should
    show `77f9a12` as the most recent commit.
 2. Check whether a real cycle has run yet: visit
    `https://sinbadtheexplorer.github.io/graywind/` — if it still says "no cycle has run
@@ -164,10 +164,10 @@ cycle-detection gate correctly skipped the merge step both times.
    end of this session, not yet started (no design work, no CSS changes). Current `index.html`
    is plain dark-blue D3 styling from the original brainstorm's scaffold task. Target: the
    look of `financial-map.html` in the sibling Bullion project
-   (`/Users/thanhnguyen/minhthanh0403/claude-projects/claudekit/financial-map.html`) — **look
+   (`~/claude-projects/claudekit/financial-map.html`) — **look
    at that actual file for the real styling** (colors, typography, layout conventions), not
    just the "dark gold theme" name from that project's `CLAUDE.md`
-   (`/Users/thanhnguyen/minhthanh0403/claude-projects/claudekit/CLAUDE.md`), since the name
+   (`~/claude-projects/claudekit/CLAUDE.md`), since the name
    alone won't capture spacing/component conventions worth matching. This is a visual-only
    change — don't touch the CSV-fetching/parsing logic (`parseCSV`, `loadCSV`, the CRLF
    hardening) while restyling; that logic was hard-won across two review passes this session.
@@ -178,7 +178,7 @@ cycle-detection gate correctly skipped the merge step both times.
 
 ## Verification idioms used in this project (for the resuming session)
 
-- `pytest tests/ -q` from `/Users/thanhnguyen/Projects/graywind` — no venv needed, system
+- `pytest tests/ -q` from `~/Projects/graywind` — no venv needed, system
   `pytest`/`python3` at `/opt/homebrew/bin/` work directly in this environment.
 - YAML syntax check when Python's `yaml` module isn't importable here (it wasn't, this
   session): `ruby -ryaml -e "YAML.load_file('.github/workflows/live-trading.yml')"`.

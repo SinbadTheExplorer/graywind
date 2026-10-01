@@ -17,11 +17,11 @@ It shipped and merged to `main` this session. Authorities, for reference/history
   after the final review went clean and the branch merged. Git history is the record now; see
   "What has changed" below for the full commit range and what each commit did.
 - Memory (background/history, kept current with this handoff):
-  `/Users/thanhnguyen/.claude/projects/-Users-thanhnguyen/memory/project-graywind-bullion-macro-gate.md`
+  `~/.claude/projects/-Users-me/memory/project-graywind-bullion-macro-gate.md`
 
 ## How to resume (do this first)
 
-1. Confirm state: `git -C /Users/thanhnguyen/Projects/graywind log --oneline -3` — most recent
+1. Confirm state: `git -C ~/Projects/graywind log --oneline -3` — most recent
    commit should be `60edac0`, on `main`. `git status` should be clean apart from the pre-existing
    untracked handoff docs listed below.
 2. There is no plan or ledger to resume — the macro-gate thread is finished, not paused. Do NOT
@@ -119,7 +119,7 @@ unrelated Phase 1 MVP thread), `docs/superpowers/burn-in-decision.md`, `docs/sup
   forward-filled value stale-high while live FRED is actually below 25). Effective gate is "2 of
   {nfci, hy_oas, curve_slope}," not the "2 of 4 stress signals" the spec's own auditability
   framing claims. Full detail in
-  `/Users/thanhnguyen/.claude/projects/-Users-thanhnguyen/memory/project-graywind-bullion-macro-gate.md`.
+  `~/.claude/projects/-Users-me/memory/project-graywind-bullion-macro-gate.md`.
   This needs a decision from whoever owns the spec (drop vix from the vote → 2-of-3, or keep it
   and document the pre-emption) — do not silently resolve it in a future session without asking.
 
@@ -134,7 +134,7 @@ call on whether/when to pick either up:
 2. **If asked to verify the live cron:** re-run the `curl` command above; if a `schedule`-event
    run now appears and succeeded, that closes out a long-standing unverified item across several
    past handoffs — update
-   `/Users/thanhnguyen/.claude/projects/-Users-thanhnguyen/memory/project-graywind-phase1.md`
+   `~/.claude/projects/-Users-me/memory/project-graywind-phase1.md`
    (currently says "Burn-in clock NOT started") accordingly.
 3. Otherwise: nothing is pending. Ask the user what they want to work on next.
 

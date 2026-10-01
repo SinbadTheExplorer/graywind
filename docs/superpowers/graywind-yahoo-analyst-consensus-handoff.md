@@ -14,14 +14,14 @@ sources" brainstorm — Reddit and YouTube are separate, fully unstarted tracks,
 designed together with this one.
 
 - Full source-list history/reasoning: memory `project-graywind-analysis-sources.md` in
-  `/Users/thanhnguyen/.claude/projects/-Users-thanhnguyen/memory/`.
+  `~/.claude/projects/-Users-me/memory/`.
 - Immediate predecessor handoff (pre-brainstorm, now superseded by the work below):
   `docs/superpowers/graywind-analysis-sources-handoff.md`.
 - No spec file exists yet — writing one is the next action.
 
 ## How to resume (do this first)
 
-1. Confirm state: `git -C /Users/thanhnguyen/Projects/graywind log --oneline -3` — top should
+1. Confirm state: `git -C ~/Projects/graywind log --oneline -3` — top should
    be `994b249` on `main`, in sync with `origin/main`, same as when this handoff was written.
 2. Re-invoke `superpowers:brainstorming` (already in progress — do not restart from scratch;
    read this whole handoff first, it contains the fully-worked design).

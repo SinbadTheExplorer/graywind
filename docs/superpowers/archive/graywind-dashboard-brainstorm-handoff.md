@@ -23,7 +23,7 @@ this as a **private GitHub repo**.
 
 ## How to resume (do this first)
 
-1. Confirm you're in the right repo: `cd /Users/thanhnguyen/Projects/graywind` (a **separate
+1. Confirm you're in the right repo: `cd ~/Projects/graywind` (a **separate
    repo** from wherever this session's harness/worktree started — that's normal, this
    project has always been operated cross-repo via absolute paths from a `claudekit`/Bullion
    worktree; see "Traps" below).
@@ -121,11 +121,11 @@ so a resuming session can trust them without re-asking):
 Then two architecture approaches were proposed for repo structure — **this is the open
 question, not yet answered:**
 
-- **Approach A (recommended by the assistant):** one private repo. `/Users/thanhnguyen/Projects/graywind`
+- **Approach A (recommended by the assistant):** one private repo. `~/Projects/graywind`
   itself becomes the GitHub repo — bot code, the new GitHub Actions workflow, and the
   dashboard HTML all live together, matching Bullion's structure exactly (single repo,
   `docs/` folder serves GitHub Pages, reuse Bullion's `_config.yml` Jekyll-exclude
-  workaround — see `/Users/thanhnguyen/minhthanh0403/claude-projects/claudekit/_config.yml`
+  workaround — see `~/claude-projects/claudekit/_config.yml`
   and `.github/workflows/daily-data.yml` in the Bullion/claudekit repo for the exact
   working reference pattern, including its secret-name-typo lesson and failure-alert-issue
   automation, both worth reusing here).
@@ -179,11 +179,11 @@ assume Approach A was accepted just because the assistant recommended it.
 
 ## Verification idioms used in this project (for the resuming session)
 
-- Bash calls that touch `/Users/thanhnguyen/Projects/graywind` from this session's actual
+- Bash calls that touch `~/Projects/graywind` from this session's actual
   sandboxed worktree must be simple, single-purpose commands — no `&&`-chaining a `cd` with
   further commands in one call. Reads/writes work fine; the sandbox specifically objects to
   "too complex to verify it stays inside the worktree" on compound commands.
-- The venv at `/Users/thanhnguyen/Projects/graywind/.venv` has all of Phase 1's Python deps
+- The venv at `~/Projects/graywind/.venv` has all of Phase 1's Python deps
   already installed; reuse it for anything dashboard-side that's Python (e.g. a script that
   formats history into the dashboard's JSON) rather than creating a second one.
 - Bare `pytest tests/ -q` now works from the repo root (a `conftest.py` was added during

@@ -20,11 +20,11 @@ live data, wrote the spec, and is now waiting on user sign-off before planning/i
 - No progress ledger yet — implementation hasn't started.
 - Prior memory (background/history, now partially superseded by the spec — the spec is more
   current on anything they disagree about):
-  `/Users/thanhnguyen/.claude/projects/-Users-thanhnguyen/memory/project-graywind-bullion-macro-gate.md`
+  `~/.claude/projects/-Users-me/memory/project-graywind-bullion-macro-gate.md`
 
 ## How to resume (do this first)
 
-1. Confirm state: `git -C /Users/thanhnguyen/Projects/graywind log --oneline -3` — most recent
+1. Confirm state: `git -C ~/Projects/graywind log --oneline -3` — most recent
    commit should be `9759d59`. `git status` should be clean apart from the pre-existing untracked
    handoff docs listed below (nothing from this session's macro-gate work is uncommitted).
 2. Read the spec: `docs/superpowers/specs/2026-08-17-graywind-bullion-macro-gate-design.md`. It

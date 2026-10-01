@@ -40,7 +40,7 @@
 - Create: `tests/test_merge_dashboard_export.py` — includes the two-run round-trip simulation
 - Create: `.github/workflows/live-trading.yml`
 
-**`graywind-dashboard` repo (new, sibling local repo at `/Users/thanhnguyen/Projects/graywind-dashboard`):**
+**`graywind-dashboard` repo (new, sibling local repo at `~/Projects/graywind-dashboard`):**
 - Create: `data/equity_curve.csv`, `data/trade_log.csv`, `data/status.csv` (headers only, seed content)
 - Create: `index.html` — the dashboard itself
 - Create: `_config.yml` — Jekyll-exclude safeguard (Bullion precedent)
@@ -1034,12 +1034,12 @@ git commit -m "Add merge_dashboard_export.py with append/overwrite semantics"
 ### Task 5: Scaffold the `graywind-dashboard` repo locally
 
 **Files:**
-- Create (new sibling repo): `/Users/thanhnguyen/Projects/graywind-dashboard/data/equity_curve.csv`
-- Create: `/Users/thanhnguyen/Projects/graywind-dashboard/data/trade_log.csv`
-- Create: `/Users/thanhnguyen/Projects/graywind-dashboard/data/status.csv`
-- Create: `/Users/thanhnguyen/Projects/graywind-dashboard/index.html`
-- Create: `/Users/thanhnguyen/Projects/graywind-dashboard/_config.yml`
-- Create: `/Users/thanhnguyen/Projects/graywind-dashboard/README.md`
+- Create (new sibling repo): `~/Projects/graywind-dashboard/data/equity_curve.csv`
+- Create: `~/Projects/graywind-dashboard/data/trade_log.csv`
+- Create: `~/Projects/graywind-dashboard/data/status.csv`
+- Create: `~/Projects/graywind-dashboard/index.html`
+- Create: `~/Projects/graywind-dashboard/_config.yml`
+- Create: `~/Projects/graywind-dashboard/README.md`
 
 **Interfaces:**
 - Consumes: the exact CSV column names Task 2/Task 4 use (`EQUITY_POINT_FIELDS`, `TRADE_FIELDS`, `STATUS_FIELDS` above) — `index.html`'s JS parsing must match them exactly.
@@ -1050,20 +1050,20 @@ This task has no tests of its own (it's static HTML/CSV, not Python) — its cor
 - [ ] **Step 1: Create the directory and seed CSV files with headers only**
 
 ```bash
-mkdir -p /Users/thanhnguyen/Projects/graywind-dashboard/data
+mkdir -p ~/Projects/graywind-dashboard/data
 ```
 
-Create `/Users/thanhnguyen/Projects/graywind-dashboard/data/equity_curve.csv`:
+Create `~/Projects/graywind-dashboard/data/equity_curve.csv`:
 ```
 timestamp,equity
 ```
 
-Create `/Users/thanhnguyen/Projects/graywind-dashboard/data/trade_log.csv`:
+Create `~/Projects/graywind-dashboard/data/trade_log.csv`:
 ```
 timestamp,symbol,side,qty,price,reason
 ```
 
-Create `/Users/thanhnguyen/Projects/graywind-dashboard/data/status.csv`:
+Create `~/Projects/graywind-dashboard/data/status.csv`:
 ```
 last_cycle_timestamp,account_equity,today_pnl,symbol,position_open,shares,entry_price,current_price,action,reason
 2026-08-15T00:00:00-04:00,,,AAPL,,,,,unknown,no cycle has run yet
@@ -1072,7 +1072,7 @@ last_cycle_timestamp,account_equity,today_pnl,symbol,position_open,shares,entry_
 
 - [ ] **Step 2: Create `index.html`**
 
-Create `/Users/thanhnguyen/Projects/graywind-dashboard/index.html`:
+Create `~/Projects/graywind-dashboard/index.html`:
 
 ```html
 <!DOCTYPE html>
@@ -1200,7 +1200,7 @@ main();
 
 - [ ] **Step 3: Create `_config.yml`**
 
-Create `/Users/thanhnguyen/Projects/graywind-dashboard/_config.yml` (Bullion precedent — see `_config.yml` in the claudekit/Bullion repo — as a safeguard in case GitHub Pages' Jekyll build ever chokes on this content; harmless if unneeded since this repo has no `docs/` folder to exclude in the first place):
+Create `~/Projects/graywind-dashboard/_config.yml` (Bullion precedent — see `_config.yml` in the claudekit/Bullion repo — as a safeguard in case GitHub Pages' Jekyll build ever chokes on this content; harmless if unneeded since this repo has no `docs/` folder to exclude in the first place):
 
 ```yaml
 # No content currently needs excluding (this repo has no docs/-style
@@ -1213,7 +1213,7 @@ exclude: []
 
 - [ ] **Step 4: Create `README.md`**
 
-Create `/Users/thanhnguyen/Projects/graywind-dashboard/README.md`:
+Create `~/Projects/graywind-dashboard/README.md`:
 
 ```markdown
 # graywind-dashboard
@@ -1233,13 +1233,13 @@ for the full design rationale.
 
 - [ ] **Step 5: Manually verify the seed dashboard renders**
 
-Run: `cd /Users/thanhnguyen/Projects/graywind-dashboard && python3 -m http.server 8000`, then open `http://localhost:8000` in a browser.
+Run: `cd ~/Projects/graywind-dashboard && python3 -m http.server 8000`, then open `http://localhost:8000` in a browser.
 Expected: page loads, shows "no cycle has run yet" for both AAPL and SPY in the status table, an empty trade log, and an empty (or blank) equity chart area — no JS console errors. Stop the server (Ctrl-C) once confirmed.
 
 - [ ] **Step 6: Initialize the local git repo and commit**
 
 ```bash
-cd /Users/thanhnguyen/Projects/graywind-dashboard
+cd ~/Projects/graywind-dashboard
 git init
 git add data/equity_curve.csv data/trade_log.csv data/status.csv index.html _config.yml README.md
 git commit -m "Scaffold graywind-dashboard: seed CSVs, index.html, README"
@@ -1453,7 +1453,7 @@ This task cannot be executed by an agentic worker — it requires the repo owner
 
 In GitHub: create a new **private** repo named `graywind` under your account. Then:
 ```bash
-cd /Users/thanhnguyen/Projects/graywind
+cd ~/Projects/graywind
 git remote add origin https://github.com/<your-username>/graywind.git
 git push -u origin main
 ```
@@ -1462,7 +1462,7 @@ git push -u origin main
 
 In GitHub: create a new **private** repo named `graywind-dashboard`. Then:
 ```bash
-cd /Users/thanhnguyen/Projects/graywind-dashboard
+cd ~/Projects/graywind-dashboard
 git remote add origin https://github.com/<your-username>/graywind-dashboard.git
 git push -u origin main
 ```

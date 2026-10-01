@@ -29,7 +29,7 @@ changed"); the underlying goal has not.
 
 ## How to resume (do this first)
 
-1. `cd /Users/thanhnguyen/Projects/graywind/.worktrees/graywind-phase1-mvp` — confirm
+1. `cd ~/Projects/graywind/.worktrees/graywind-phase1-mvp` — confirm
    `git rev-parse --abbrev-ref HEAD` says `graywind-phase1-mvp`, and
    `git log --oneline main..HEAD` shows exactly one commit, `6d62609` (the prior handoff).
    `git status --short` should show only `M .gitignore` and `?? requirements.txt` — if it

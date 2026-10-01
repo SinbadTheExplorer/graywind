@@ -19,7 +19,7 @@ sector-engine brainstorm:
   riskiest piece of the original decomposition; still unresolved.
 
 Full history: memory `project-graywind-sector-engine.md` in
-`/Users/thanhnguyen/.claude/projects/-Users-thanhnguyen/memory/` (the original 3-way subsystem
+`~/.claude/projects/-Users-me/memory/` (the original 3-way subsystem
 decomposition, root-cause analysis behind subsystem 1 shipping first, and why 2/3 were
 deferred). This repo's existing gate pattern (`graywind_strategy/gates/`) is what any new
 source will plug into — most recently extended by the per-sector gate pattern (spec:
@@ -29,7 +29,7 @@ No spec or plan exists yet for this work — writing one is the first next actio
 
 ## How to resume (do this first)
 
-1. Confirm state: `git -C /Users/thanhnguyen/Projects/graywind log --oneline -3` — top should
+1. Confirm state: `git -C ~/Projects/graywind log --oneline -3` — top should
    be `994b249` on `main`, in sync with `origin/main`.
 2. Read memory `project-graywind-sector-engine.md` for the subsystem 2/3 history and the
    reasoning already done there.

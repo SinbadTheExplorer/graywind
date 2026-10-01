@@ -27,7 +27,7 @@ presented, not finished**, and nothing has been written to a spec file yet.
 
 ## How to resume (do this first)
 
-1. Confirm state: `git -C /Users/thanhnguyen/Projects/graywind log --oneline -3` — most
+1. Confirm state: `git -C ~/Projects/graywind log --oneline -3` — most
    recent commit should still be `37101a6`. No code was written this session — it was pure
    design/discussion — so `git status` should be clean apart from these handoff docs.
 2. Re-check the live dashboard: `https://sinbadtheexplorer.github.io/graywind/` — as

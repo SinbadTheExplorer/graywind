@@ -5,7 +5,7 @@
 to a single-repo layout before any GitHub-side setup (Task 7) happened — see "Revision" below.
 **Prior art referenced:** Bullion's live-data pipeline (`financial-map.html`,
 `.github/workflows/daily-data.yml`, `_config.yml` in
-`/Users/thanhnguyen/minhthanh0403/claude-projects/claudekit`)
+`~/claude-projects/claudekit`)
 
 ## Revision (2026-08-15, same day as initial implementation)
 

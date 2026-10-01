@@ -29,7 +29,7 @@ caveats"; neither is a defect in this code.
 
 ## How to resume (do this first)
 
-1. **Location:** this is merged into local `main` at `/Users/thanhnguyen/Projects/graywind`.
+1. **Location:** this is merged into local `main` at `~/Projects/graywind`.
    The feature branch `graywind-bullion-macro-debate` and its worktree are **deleted** —
    don't look for either.
 2. **Local `main` is 12 commits ahead of `origin/main` and NOT pushed.** Confirm with

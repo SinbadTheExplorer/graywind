@@ -26,7 +26,7 @@ should produce, not skip to implementing.
 
 ## How to resume (do this first)
 
-1. Confirm state: `git -C /Users/thanhnguyen/Projects/graywind log --oneline -3` — most recent
+1. Confirm state: `git -C ~/Projects/graywind log --oneline -3` — most recent
    commit should be `37101a6` ("Fix backtester lookahead bias, capital check, and drawdown
    blindness; fix Alpaca IEX feed"). Branch is `main`, no feature branch in flight.
 2. Check whether a real live cycle has run yet: visit

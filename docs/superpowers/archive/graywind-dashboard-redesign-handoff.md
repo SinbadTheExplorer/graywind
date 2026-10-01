@@ -22,11 +22,11 @@ Three separate threads closed out this session, in order:
 Full history/rationale for items 1 and 2: `docs/superpowers/graywind-post-macro-gate-handoff.md`
 (previous handoff, now superseded by this one but still useful for the macro-gate shipping
 story) and memory `project-graywind-bullion-macro-gate.md` /
-`project-graywind-phase1.md` in `/Users/thanhnguyen/.claude/projects/-Users-thanhnguyen/memory/`.
+`project-graywind-phase1.md` in `~/.claude/projects/-Users-me/memory/`.
 
 ## How to resume (do this first)
 
-1. Confirm state: `git -C /Users/thanhnguyen/Projects/graywind log --oneline -3` — most recent
+1. Confirm state: `git -C ~/Projects/graywind log --oneline -3` — most recent
    commit should be `2f51f0e`, on `main`. `git status` should be clean apart from the untracked
    handoff docs listed below. Local `main` is **in sync with `origin/main`** (0 ahead, 0
    behind) — everything in this handoff is already pushed and live.
@@ -165,7 +165,7 @@ redesign. What changed, concretely:
 1. **If the user has run the roster validation:** they were given this exact sequence to run
    locally (not through Claude, to keep credentials out of the transcript):
    ```
-   cd /Users/thanhnguyen/Projects/graywind
+   cd ~/Projects/graywind
    export ALPACA_API_KEY=... ALPACA_API_SECRET=...
    python3 scripts/fetch_roster_data.py
    python3 scripts/validate_sector_engine.py

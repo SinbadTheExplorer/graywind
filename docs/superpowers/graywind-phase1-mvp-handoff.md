@@ -18,7 +18,7 @@ ML or real capital. Being executed via `superpowers:subagent-driven-development`
 
 ## How to resume (do this first)
 
-1. `cd /Users/thanhnguyen/Projects/graywind/.worktrees/graywind-phase1-mvp` — confirm
+1. `cd ~/Projects/graywind/.worktrees/graywind-phase1-mvp` — confirm
    `git rev-parse --abbrev-ref HEAD` says `graywind-phase1-mvp`, and
    `git log --oneline main..HEAD` is empty (0 commits ahead of main `fc82b30` as of this
    writing — all of Task 1's work so far is uncommitted, deliberately, see below).
@@ -70,7 +70,7 @@ committed, since the plan's Step 9 bundles them with the LEAN scaffold files fro
   Whoever resumes should treat "create a free QuantConnect account" as a de facto
   prerequisite alongside the already-documented Alpaca paper account (Task 9).
 - ⚠️ **QuantConnect account state as of this handoff:** user signed up mid-session. Org
-  "Minh Thành Nguyễn" (free tier, org id `fc101acdea2b7db9704baad94f8bc8ec`).
+  "<owner>" (free tier, org id `fc101acdea2b7db9704baad94f8bc8ec`).
   **User Id = `1786597952`** (found via the profile URL `/u/1786597952` — this is a public
   profile ID, not a secret, safe to reuse directly). The **API token is NOT displayed
   anywhere in the QuantConnect web UI**:
