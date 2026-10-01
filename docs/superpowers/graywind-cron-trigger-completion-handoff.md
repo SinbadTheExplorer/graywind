@@ -74,7 +74,7 @@ own scope, which never included these in its commit list):**
 - **Worker verified end-to-end and live.** `GITHUB_PAT` was set by the owner directly in
   their own terminal (`cd cron-trigger && npx wrangler secret put GITHUB_PAT` — never typed
   into this session, per the hard rule in the prior handoff). Confirmed working:
-  `curl https://graywind-cron-trigger.nguyenminhthanh0403-hub.workers.dev` → `dispatched`
+  `curl https://graywind-cron-trigger.SinbadTheExplorer.workers.dev` → `dispatched`
   (HTTP 200), and a fresh `workflow_dispatch` run (`33835102175`) landed in GitHub's Actions
   history (`status: in_progress`) within seconds of the curl. Plan step 8 is done.
 - **Both mitigations are now live in production**, not just in the working tree — commit
@@ -167,9 +167,9 @@ own scope, which never included these in its commit list):**
   Re-run rather than trusting this count once any Python file changes.
 - Live workflow-run history (no `gh` CLI available in this environment; repo is public, no
   auth needed):
-  `curl -s "https://api.github.com/repos/nguyenminhthanh0403-hub/graywind/actions/workflows/334898521/runs?per_page=N"`
+  `curl -s "https://api.github.com/repos/SinbadTheExplorer/graywind/actions/workflows/334898521/runs?per_page=N"`
 - Worker liveness/auth check:
-  `curl -s -w "\nHTTP_STATUS:%{http_code}\n" https://graywind-cron-trigger.nguyenminhthanh0403-hub.workers.dev`
+  `curl -s -w "\nHTTP_STATUS:%{http_code}\n" https://graywind-cron-trigger.SinbadTheExplorer.workers.dev`
   — expect `dispatched` / 200; a 401 means `GITHUB_PAT` regressed.
 - Visual/DOM verification of a static dashboard page that fetches relative data: serve it
   over `python3 -m http.server <port>` from the repo root, then drive real headless Chrome

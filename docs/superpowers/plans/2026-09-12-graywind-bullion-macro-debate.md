@@ -163,7 +163,7 @@ import requests
 NEWS_DEBATE_MODEL = "deepseek-v4-flash"
 NEWS_DEBATE_MAX_TOKENS = 1024
 
-BULLION_NEWS_URL = "https://nguyenminhthanh0403-hub.github.io/claudekit/bullion-live-map/news.json"
+BULLION_NEWS_URL = "https://sinbadtheexplorer.github.io/claudekit/bullion-live-map/news.json"
 STALENESS_CEILING_HOURS = 48
 
 SUBMIT_EVENTS_TOOL_NAME = "submit_macro_events"
@@ -762,7 +762,7 @@ Verification idioms). Must explicitly state, in "What has failed / risks / cavea
 - No live smoke test against the real DeepSeek API or the real Bullion feed has happened —
   same caveat pattern as `news_debate.py`'s own handoff history.
 - Next action for a resuming session: check whether Bullion's news cron has been fixed
-  (`curl -s https://nguyenminhthanh0403-hub.github.io/claudekit/bullion-live-map/news.json`
+  (`curl -s https://sinbadtheexplorer.github.io/claudekit/bullion-live-map/news.json`
   and inspect `generated_at`); if fresh, trigger a `workflow_dispatch` run during market
   hours and confirm `dashboard-data/macro_debate_log.csv` gains rows.
 

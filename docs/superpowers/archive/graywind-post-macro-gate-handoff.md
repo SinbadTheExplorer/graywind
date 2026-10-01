@@ -64,7 +64,7 @@ the ones before it — this has been true across multiple recent handoffs, not n
   they describe are now fully shipped. Do not resume from them; this file supersedes both.
 - ⚠️ Bullion's `data.json` (the macro gate's live external dependency) can drift schema/units
   without warning — if you touch `macro_gate.py` again, re-fetch
-  `https://nguyenminhthanh0403-hub.github.io/claudekit/bullion-live-map/data.json` and re-verify
+  `https://sinbadtheexplorer.github.io/claudekit/bullion-live-map/data.json` and re-verify
   against the spec rather than trusting a memory description, the same discipline the original
   design session used to catch two real unit/shape errors before they shipped.
 
@@ -107,7 +107,7 @@ unrelated Phase 1 MVP thread), `docs/superpowers/burn-in-decision.md`, `docs/sup
   after — they never reached `main` in a broken state.
 - **UNVERIFIED, carried forward unresolved from the prior handoff (unrelated to macro-gate):**
   re-checked this session via
-  `curl -s "https://api.github.com/repos/nguyenminhthanh0403-hub/graywind/actions/workflows/live-trading.yml/runs?per_page=10"`
+  `curl -s "https://api.github.com/repos/SinbadTheExplorer/graywind/actions/workflows/live-trading.yml/runs?per_page=10"`
   — still only 2 runs total, both manual `workflow_dispatch` from Saturday 2026-08-15. **Zero
   `schedule`-triggered runs have completed as of this handoff.** The live-trading cron's first
   real unattended market-hours cycle still hasn't been confirmed. Check again with the same
@@ -144,11 +144,11 @@ call on whether/when to pick either up:
 - **No `gh` CLI in this environment.** Check GitHub Actions run history via the public REST API
   instead (works unauthenticated for a public repo):
   ```
-  curl -s "https://api.github.com/repos/nguyenminhthanh0403-hub/graywind/actions/workflows/live-trading.yml/runs?per_page=10" \
+  curl -s "https://api.github.com/repos/SinbadTheExplorer/graywind/actions/workflows/live-trading.yml/runs?per_page=10" \
     | python3 -c "import json,sys; d=json.load(sys.stdin); [print(r['run_number'], r['status'], r['conclusion'], r['event'], r['created_at']) for r in d['workflow_runs']]"
   ```
 - Bullion's live public data file, for grounding any macro-gate work in real data rather than a
-  memory description: `curl -s "https://nguyenminhthanh0403-hub.github.io/claudekit/bullion-live-map/data.json"`.
+  memory description: `curl -s "https://sinbadtheexplorer.github.io/claudekit/bullion-live-map/data.json"`.
 - This project follows TDD (red/green) for any `gates/`/`pipeline.py`/`strategy_engine.py`/
   `backtester.py` change — see `tests/test_vix_gate.py`'s `MagicMock`-session mocking convention
   and `tests/test_pipeline.py`'s `patch.multiple(...)`-based `_passing_gates()` helper.

@@ -33,7 +33,7 @@ New file **`graywind_strategy/gates/macro_gate.py`**, same shape as the existing
 (`vix_gate.py`, `sentiment_gate.py`, `earnings_gate.py`):
 
 - **`fetch_bullion_macro_snapshot(as_of_date, session=requests)`** — GETs Bullion's public
-  `https://nguyenminhthanh0403-hub.github.io/claudekit/bullion-live-map/data.json` and returns a
+  `https://sinbadtheexplorer.github.io/claudekit/bullion-live-map/data.json` and returns a
   plain `dict`: `{"vix": float, "nfci": float, "hy_oas": float, "curve_slope": float}`.
 - **`macro_gate(snapshot, required_breaches=2)`** — a **vote-count**, not a weighted/z-score
   composite. Each field has one fixed stress threshold; blocks if `required_breaches` (of 4)

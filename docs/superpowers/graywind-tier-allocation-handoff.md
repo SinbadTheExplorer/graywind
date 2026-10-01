@@ -185,10 +185,10 @@ read instead of this one.
   origin/main:<path>`.
 - GitHub Actions run history (works unauthenticated for this public repo, no `gh` CLI needed):
   ```
-  curl -s "https://api.github.com/repos/nguyenminhthanh0403-hub/graywind/actions/workflows/live-trading.yml/runs?per_page=10" \
+  curl -s "https://api.github.com/repos/SinbadTheExplorer/graywind/actions/workflows/live-trading.yml/runs?per_page=10" \
     | python3 -c "import json,sys; d=json.load(sys.stdin); [print(r['run_number'], r['status'], r['conclusion'], r['event'], r['created_at']) for r in d['workflow_runs']]"
   ```
-- Live public dashboard: `https://nguyenminhthanh0403-hub.github.io/graywind/`.
+- Live public dashboard: `https://sinbadtheexplorer.github.io/graywind/`.
 - This project follows TDD (red/green) for any `gates/`/`pipeline.py`/`strategy_engine.py`/
   `backtester.py`/`risk/`/`live_loop.py` change, and uses `superpowers:brainstorming` →
   `superpowers:writing-plans` → `superpowers:subagent-driven-development` for multi-step

@@ -173,10 +173,10 @@ handoff exists because the user asked for a handoff mid-brainstorm, before the f
 - No `gh` CLI in this environment — check GitHub Actions run history via the public REST API
   (works unauthenticated for a public repo):
   ```
-  curl -s "https://api.github.com/repos/nguyenminhthanh0403-hub/graywind/actions/workflows/live-trading.yml/runs?per_page=10" \
+  curl -s "https://api.github.com/repos/SinbadTheExplorer/graywind/actions/workflows/live-trading.yml/runs?per_page=10" \
     | python3 -c "import json,sys; d=json.load(sys.stdin); [print(r['run_number'], r['status'], r['conclusion'], r['event'], r['created_at']) for r in d['workflow_runs']]"
   ```
-- Live public dashboard: `https://nguyenminhthanh0403-hub.github.io/graywind/`.
+- Live public dashboard: `https://sinbadtheexplorer.github.io/graywind/`.
 - This project follows TDD (red/green) for any `gates/`/`pipeline.py`/`strategy_engine.py`/
   `backtester.py` change.
 - For any multi-task Python implementation: `superpowers:writing-plans` →

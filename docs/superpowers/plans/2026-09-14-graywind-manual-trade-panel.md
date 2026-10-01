@@ -1186,10 +1186,10 @@ compatibility_date = "2026-09-03"
 #   wrangler secret put GITHUB_PAT
 #   wrangler secret put MANUAL_TRADE_TOKEN
 [vars]
-GITHUB_OWNER = "nguyenminhthanh0403-hub"
+GITHUB_OWNER = "SinbadTheExplorer"
 GITHUB_REPO = "graywind"
 GITHUB_WORKFLOW_FILE = "manual-trade.yml"
-DASHBOARD_ORIGIN = "https://nguyenminhthanh0403-hub.github.io"
+DASHBOARD_ORIGIN = "https://sinbadtheexplorer.github.io"
 ```
 
 - [ ] **Step 2: Write `src/index.js`**
@@ -1669,7 +1669,7 @@ Copy the printed `*.workers.dev` URL into `MANUAL_TRADE_WORKER_URL` in `index.ht
 - [ ] **Step 3: Confirm the GitHub PAT can dispatch the new workflow**
 
 ```bash
-curl -s -X POST https://api.github.com/repos/nguyenminhthanh0403-hub/graywind/actions/workflows/manual-trade.yml/dispatches \
+curl -s -X POST https://api.github.com/repos/SinbadTheExplorer/graywind/actions/workflows/manual-trade.yml/dispatches \
   -H "Authorization: Bearer <the same PAT>" -H "Accept: application/vnd.github+json" \
   -d '{"ref":"main","inputs":{"account":"small","symbol":"AAPL","action":"close","qty":"","stop_price":"","target_price":"","idempotency_key":"manual-verify-1"}}'
 ```

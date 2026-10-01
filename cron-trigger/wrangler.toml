@@ -17,6 +17,6 @@ crons = ["*/15 13-20 * * 1-5"]
 # the value never passes through this session. Until it's set, env.TRIGGER_SECRET
 # is undefined and every manual GET 404s -- fails closed, not open.
 [vars]
-GITHUB_OWNER = "nguyenminhthanh0403-hub"
+GITHUB_OWNER = "SinbadTheExplorer"
 GITHUB_REPO = "graywind"
 GITHUB_WORKFLOW_FILE = "live-trading.yml"

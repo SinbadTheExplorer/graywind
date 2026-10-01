@@ -69,7 +69,7 @@ against). All 11 are already committed; nothing is staged or uncommitted.
   `history` by ISO date string instead, each date holding whatever fields were fresh that day.
   The spec has the corrected shape; the memory file has since been corrected too, but if a future
   session reads an even older cached description, don't trust it — refetch
-  `https://nguyenminhthanh0403-hub.github.io/claudekit/bullion-live-map/data.json` and check.
+  `https://sinbadtheexplorer.github.io/claudekit/bullion-live-map/data.json` and check.
 - ⚠️ **HY OAS units:** Bullion's `hy_oas` field is in percentage points (e.g. `2.71` = 2.71%),
   matching FRED's raw series — NOT basis points. An earlier session's "500bps" framing was wrong;
   the correct threshold is `5.0`. This is already fixed in the spec — just don't let a stale
@@ -106,7 +106,7 @@ thread, unrelated, tracked in git), `docs/superpowers/archive/` (older archived 
   exists yet for this thread.**
 - Checked the separate, unrelated live-cron verification thread: via the public GitHub Actions
   API (no `gh` CLI in this environment — used `curl` against
-  `api.github.com/repos/nguyenminhthanh0403-hub/graywind/actions/workflows/live-trading.yml/runs`
+  `api.github.com/repos/SinbadTheExplorer/graywind/actions/workflows/live-trading.yml/runs`
   instead), confirmed only 2 runs exist total, both manual `workflow_dispatch` on Saturday
   2026-08-15 (both succeeded). Zero `schedule`-triggered runs — but this isn't a bug: the
   workflow file itself only landed on `main` that same Saturday, and Monday 2026-08-17 (today) is
@@ -157,11 +157,11 @@ thread, unrelated, tracked in git), `docs/superpowers/archive/` (older archived 
 - **No `gh` CLI in this environment.** Check GitHub Actions run history via the public REST API
   instead (works unauthenticated for a public repo):
   ```
-  curl -s "https://api.github.com/repos/nguyenminhthanh0403-hub/graywind/actions/workflows/live-trading.yml/runs?per_page=10" \
+  curl -s "https://api.github.com/repos/SinbadTheExplorer/graywind/actions/workflows/live-trading.yml/runs?per_page=10" \
     | python3 -c "import json,sys; d=json.load(sys.stdin); [print(r['run_number'], r['status'], r['conclusion'], r['event'], r['created_at']) for r in d['workflow_runs']]"
   ```
 - Bullion's live public data file, for grounding any macro-gate work in real data rather than a
-  memory description: `curl -s "https://nguyenminhthanh0403-hub.github.io/claudekit/bullion-live-map/data.json"`.
+  memory description: `curl -s "https://sinbadtheexplorer.github.io/claudekit/bullion-live-map/data.json"`.
 - This project follows TDD (red/green) for any `gates/`/`pipeline.py`/`strategy_engine.py`/
   `backtester.py` change — see `tests/test_vix_gate.py`'s `MagicMock`-session mocking convention
   and `tests/test_pipeline.py`'s `patch.multiple(...)`-based `_passing_gates()` helper; the new

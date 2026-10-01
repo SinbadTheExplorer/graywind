@@ -191,12 +191,12 @@ redesign. What changed, concretely:
 - **No `gh` CLI in this environment.** Check GitHub Actions run history via the public REST API
   (works unauthenticated for a public repo):
   ```
-  curl -s "https://api.github.com/repos/nguyenminhthanh0403-hub/graywind/actions/workflows/live-trading.yml/runs?per_page=10" \
+  curl -s "https://api.github.com/repos/SinbadTheExplorer/graywind/actions/workflows/live-trading.yml/runs?per_page=10" \
     | python3 -c "import json,sys; d=json.load(sys.stdin); [print(r['run_number'], r['status'], r['conclusion'], r['event'], r['created_at']) for r in d['workflow_runs']]"
   ```
-- Live public dashboard: `https://nguyenminhthanh0403-hub.github.io/graywind/` (returns 200 as
+- Live public dashboard: `https://sinbadtheexplorer.github.io/graywind/` (returns 200 as
   of this writing; may take a minute or two to redeploy after a push).
-- Bullion's live public data file (macro-gate grounding): `curl -s "https://nguyenminhthanh0403-hub.github.io/claudekit/bullion-live-map/data.json"`.
+- Bullion's live public data file (macro-gate grounding): `curl -s "https://sinbadtheexplorer.github.io/claudekit/bullion-live-map/data.json"`.
 - **For any `index.html`/dashboard change:** don't trust a static read of the file — serve it
   (`python3 -m http.server` from the repo root, since `fetch()` of local CSVs needs `http://`,
   not `file://`) and drive it with the `headless-chrome-verification` skill's CDP probe template

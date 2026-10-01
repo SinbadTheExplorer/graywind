@@ -38,7 +38,7 @@ what the audit's one-line summary implied.
    analyst consensus, which is called only on buy decisions and is cached — a far smaller
    exposure than "yfinance underpins the gates" implies.
 2. **The macro gate is not a vendor dependency at all — it is a self-dependency.** It
-   fetches `nguyenminhthanh0403-hub.github.io/claudekit/bullion-live-map/data.json`, the
+   fetches `sinbadtheexplorer.github.io/claudekit/bullion-live-map/data.json`, the
    output of the owner's *own* Bullion project cron. See the dedicated section below;
    this is the most under-examined input in the system.
 

@@ -27,7 +27,7 @@ class MacroDataUnavailable(Exception):
     pass
 
 
-BULLION_DATA_URL = "https://nguyenminhthanh0403-hub.github.io/claudekit/bullion-live-map/data.json"
+BULLION_DATA_URL = "https://sinbadtheexplorer.github.io/claudekit/bullion-live-map/data.json"
 DAILY_STALENESS_CEILING_DAYS = 7
 WEEKLY_STALENESS_CEILING_DAYS = 14
 

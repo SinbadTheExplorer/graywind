@@ -30,7 +30,7 @@ presented, not finished**, and nothing has been written to a spec file yet.
 1. Confirm state: `git -C /Users/thanhnguyen/Projects/graywind log --oneline -3` — most
    recent commit should still be `37101a6`. No code was written this session — it was pure
    design/discussion — so `git status` should be clean apart from these handoff docs.
-2. Re-check the live dashboard: `https://nguyenminhthanh0403-hub.github.io/graywind/` — as
+2. Re-check the live dashboard: `https://sinbadtheexplorer.github.io/graywind/` — as
    of this handoff it still shows an empty equity curve and trade log. The user's working
    theory this session is that the gap is simply because it was Sunday (market closed), not
    a code problem — **plausible but not independently confirmed** from Actions run history
@@ -164,7 +164,7 @@ thread, unrelated), `docs/superpowers/archive/` (older archived handoffs).
    both diagnostic ("is there a problem"), not validation that a fix generalizes.
 5. Separately, unblocked, can happen anytime: verify the live cron on the next weekday
    market-hours run, and independently confirm the GitHub repo secrets are current (Settings
-   → Secrets and variables → Actions on `nguyenminhthanh0403-hub/graywind`).
+   → Secrets and variables → Actions on `SinbadTheExplorer/graywind`).
 
 ## Verification idioms used in this project (for the resuming session)
 

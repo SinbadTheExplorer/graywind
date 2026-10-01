@@ -167,8 +167,8 @@ list in "What's next."
   (`.venv/bin/pip install anthropic` or `pip install -r requirements.txt`).
 - GitHub Actions run/job/step history without `gh` CLI (works unauthenticated, public repo):
   ```
-  curl -s "https://api.github.com/repos/nguyenminhthanh0403-hub/graywind/actions/workflows/live-trading.yml/runs?per_page=50"
-  curl -s "https://api.github.com/repos/nguyenminhthanh0403-hub/graywind/actions/runs/<run_id>/jobs"
+  curl -s "https://api.github.com/repos/SinbadTheExplorer/graywind/actions/workflows/live-trading.yml/runs?per_page=50"
+  curl -s "https://api.github.com/repos/SinbadTheExplorer/graywind/actions/runs/<run_id>/jobs"
   ```
 - Checking real repo secrets (names only, never values): only via the GitHub UI or `gh secret
   list` (needs `gh` CLI + auth); the unauthenticated REST secrets-list endpoint 401s.

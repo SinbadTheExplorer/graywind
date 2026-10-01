@@ -68,12 +68,12 @@ Authorities:
 - `cron-trigger/` — Cloudflare Worker source: `wrangler.toml`, `src/index.js`,
   `package.json`, `package-lock.json`, `node_modules/` (now gitignored). **Already
   deployed to Cloudflare** (script name `graywind-cron-trigger`, account
-  "Nguyenminhthanh0403@gmail.com's Account", id
+  "<owner's Cloudflare account>", id
   `366c34b19f7ba3d31be5a6617c01ff2b`) — but via direct Cloudflare API calls through the
   `plugin:cloudflare:cloudflare` MCP connection, **not** `wrangler deploy` (the owner's
   local `wrangler login` succeeded but `deploy` was never actually run — confirmed via
   `~/Library/Preferences/.wrangler/logs/*.log`, which recorded a `login` command but no
-  `deploy`). Live URL: `https://graywind-cron-trigger.nguyenminhthanh0403-hub.workers.dev`.
+  `deploy`). Live URL: `https://graywind-cron-trigger.SinbadTheExplorer.workers.dev`.
   Cron Trigger attached and **active**: `*/15 13-20 * * 1-5`.
 - `docs/superpowers/plans/2026-09-03-graywind-symbol-reference-table.md` — executed.
 - `docs/superpowers/plans/2026-09-03-graywind-external-cron-trigger.md` — steps 1-6 done, step 7 not done.
@@ -87,7 +87,7 @@ Authorities:
 
 **Scratch workspace / traps:**
 - ⚠️ **The Cloudflare Worker is live and firing every 15 minutes right now, and every
-  invocation is failing.** `GET https://graywind-cron-trigger.nguyenminhthanh0403-hub.workers.dev`
+  invocation is failing.** `GET https://graywind-cron-trigger.SinbadTheExplorer.workers.dev`
   returns `failed: 401 ...` because `GITHUB_PAT` was never set — confirmed via
   `GET /accounts/.../workers/scripts/graywind-cron-trigger/secrets` → `[]` as of this
   handoff. Harmless (GitHub just rejects the unauthenticated call, no side effects), but
@@ -116,10 +116,10 @@ Authorities:
   and the retry succeeded. If a future Cloudflare API call trips the same classifier,
   that's expected, not a bug — explain and ask, don't route around it.
 - ⚠️ **A new Cloudflare `workers.dev` subdomain was created this session** —
-  `nguyenminhthanh0403-hub` (owner's explicit choice among 3 options; the account had
+  `SinbadTheExplorer` (owner's explicit choice among 3 options; the account had
   none before this). This is a one-time, account-wide, effectively permanent setting:
   every future Worker on this account will live under
-  `<name>.nguyenminhthanh0403-hub.workers.dev` unless deliberately changed later.
+  `<name>.SinbadTheExplorer.workers.dev` unless deliberately changed later.
 
 **Not mine — leave alone:** `.DS_Store`, `.claude/`, `scripts/fetch_serv_bars.py`, the
 pre-existing `docs/superpowers/archive/*` entries listed above.
@@ -160,7 +160,7 @@ pre-existing `docs/superpowers/archive/*` entries listed above.
 1. Owner runs, in their own terminal (not through Claude Code):
    `cd cron-trigger && npx wrangler secret put GITHUB_PAT`
 2. Once set, run Step 8 of `docs/superpowers/plans/2026-09-03-graywind-external-cron-trigger.md`:
-   `curl https://graywind-cron-trigger.nguyenminhthanh0403-hub.workers.dev` (expect
+   `curl https://graywind-cron-trigger.SinbadTheExplorer.workers.dev` (expect
    `dispatched`), then check GitHub's Actions API for a fresh `workflow_dispatch` run
    landing within ~2 minutes.
 3. Commit and push: `index.html`, `.github/workflows/live-trading.yml`, `.gitignore`,
@@ -183,7 +183,7 @@ pre-existing `docs/superpowers/archive/*` entries listed above.
   cached count.
 - Live workflow-run history (no `gh` CLI available in this environment; repo is public,
   no auth needed):
-  `curl -s "https://api.github.com/repos/nguyenminhthanh0403-hub/graywind/actions/workflows/334898521/runs?per_page=N"`
+  `curl -s "https://api.github.com/repos/SinbadTheExplorer/graywind/actions/workflows/334898521/runs?per_page=N"`
 - Cloudflare Worker/account state: via the `plugin:cloudflare:cloudflare` MCP tools
   (`execute` with `cloudflare.request(...)`), scoped to `accountId`
   `366c34b19f7ba3d31be5a6617c01ff2b`. Re-authenticate via

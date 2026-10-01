@@ -24,7 +24,7 @@ unverified, and a fresh visual-design ask just added on top.
    should say `main`; `git -C /Users/thanhnguyen/Projects/graywind log --oneline -1` should
    show `77f9a12` as the most recent commit.
 2. Check whether a real cycle has run yet: visit
-   `https://nguyenminhthanh0403-hub.github.io/graywind/` — if it still says "no cycle has run
+   `https://sinbadtheexplorer.github.io/graywind/` — if it still says "no cycle has run
    yet" for both AAPL and SPY, no real market-hours cycle has completed since this handoff was
    written. If it shows real data, the end-to-end path is proven; update this handoff's
    "UNVERIFIED" section below rather than trusting this note forever.
@@ -43,8 +43,8 @@ full trade history are visible to anyone. Do not silently re-assume "private, un
 only" from the design doc's older language.
 
 **Public URLs (live now):**
-- Repo: `https://github.com/nguyenminhthanh0403-hub/graywind`
-- Dashboard: `https://nguyenminhthanh0403-hub.github.io/graywind/`
+- Repo: `https://github.com/SinbadTheExplorer/graywind`
+- Dashboard: `https://sinbadtheexplorer.github.io/graywind/`
 
 **Files created / changed (committed, `main` at `77f9a12`):**
 - `graywind_strategy/state_store.py` — CSV-based internal state (`state/positions.csv`,
@@ -75,7 +75,7 @@ only" from the design doc's older language.
   its absence as a bug.
 - ⚠️ **`~/.ssh/id_ed25519_github`** — a dedicated SSH keypair generated this session
   specifically for pushing to GitHub, with its public key added to the
-  `nguyenminhthanh0403-hub` GitHub account. Live and in use (`~/.ssh/config` has a
+  `SinbadTheExplorer` GitHub account. Live and in use (`~/.ssh/config` has a
   `Host github.com` block pointing at it). Not project-specific, but worth knowing it exists
   if git push auth ever needs debugging.
 - ⚠️ **Four GitHub Actions secrets are set on the repo** (`ALPACA_API_KEY`,
@@ -140,7 +140,7 @@ cycle-detection gate correctly skipped the merge step both times.
   **not** prove the real commit+push path works, or that a real Alpaca/FRED/Finnhub API call
   succeeds with the credentials now configured. The 15-minute cron is live and will fire
   automatically during the next real market-hours window; check the dashboard URL after that
-  to confirm real data appears, or check `https://github.com/nguyenminhthanh0403-hub/graywind/actions`
+  to confirm real data appears, or check `https://github.com/SinbadTheExplorer/graywind/actions`
   for a run whose "Run the live trading cycle" step doesn't say "outside market hours, exiting".
 - **Repo visibility is a real scope change, not a detail.** The original design assumed a
   private repo with only an unlisted dashboard URL exposed. It's now a fully public repo —

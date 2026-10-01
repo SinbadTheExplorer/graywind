@@ -145,8 +145,8 @@ secrets diagnosis (see below) — both happened in the coordinating session, not
   directly — the unauthenticated REST API returns 401 for the secrets-list endpoint.
 - GitHub Actions run/job/step history (works unauthenticated, public repo):
   ```
-  curl -s "https://api.github.com/repos/nguyenminhthanh0403-hub/graywind/actions/workflows/live-trading.yml/runs?per_page=50"
-  curl -s "https://api.github.com/repos/nguyenminhthanh0403-hub/graywind/actions/runs/<run_id>/jobs"
+  curl -s "https://api.github.com/repos/SinbadTheExplorer/graywind/actions/workflows/live-trading.yml/runs?per_page=50"
+  curl -s "https://api.github.com/repos/SinbadTheExplorer/graywind/actions/runs/<run_id>/jobs"
   ```
 - Repo tree/contents without cloning: `curl -s "https://api.github.com/repos/<owner>/<repo>/contents/<path>"`.
 - Before starting related work, check `git branch -a` / `git worktree list` / `git log --all

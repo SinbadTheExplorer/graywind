@@ -218,7 +218,7 @@ needed; the table content above can be inlined as a JS array of objects.
   XOM/CVX/CEG/CCJ would need to drop or move tiers. Don't silently relabel this.
 - **Bullion↔Graywind integration is flagged, not scoped.** What's concretely already
   true: `graywind_strategy/gates/macro_gate.py` already fetches
-  `BULLION_DATA_URL = "https://nguyenminhthanh0403-hub.github.io/claudekit/bullion-live-map/data.json"`
+  `BULLION_DATA_URL = "https://sinbadtheexplorer.github.io/claudekit/bullion-live-map/data.json"`
   for macro stress signals (NFCI, HY OAS, yield curve slope, VIX) — this is the existing
   sibling-project precedent the owner referenced. What's **not** decided: whether/how to
   extend this to sector-specific signals for the new nuclear/quantum/energy names (e.g.

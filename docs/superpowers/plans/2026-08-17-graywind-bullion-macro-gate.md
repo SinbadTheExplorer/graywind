@@ -27,7 +27,7 @@ reaching it.
 - `hy_oas` threshold is `5.0` in **percentage points**, not basis points — do not reintroduce a
   "500" threshold.
 - Bullion's `data.json` endpoint:
-  `https://nguyenminhthanh0403-hub.github.io/claudekit/bullion-live-map/data.json`.
+  `https://sinbadtheexplorer.github.io/claudekit/bullion-live-map/data.json`.
 - `decide_trade` gets no new required parameter — the gate needs no credential.
 - Thresholds (breach conditions): `vix >= 25.0`, `nfci >= 0.0`, `hy_oas >= 5.0`,
   `curve_slope < 0.0` (`curve_slope = us10y - us2y`).
@@ -163,7 +163,7 @@ git commit -m "feat: add macro_gate vote-count function"
 **Interfaces:**
 - Consumes: `MacroDataUnavailable` from Task 1 (same file).
 - Produces: `fetch_bullion_macro_snapshot(as_of_date, session=requests)` — GETs
-  `https://nguyenminhthanh0403-hub.github.io/claudekit/bullion-live-map/data.json`, returns
+  `https://sinbadtheexplorer.github.io/claudekit/bullion-live-map/data.json`, returns
   `{"vix": float, "nfci": float, "hy_oas": float, "curve_slope": float}` on success, raises
   `MacroDataUnavailable` on any failure. `as_of_date` is a `datetime.date`, required (no
   default). Later tasks (Task 3) import this name directly.
@@ -322,7 +322,7 @@ from datetime import datetime
 
 import requests
 
-BULLION_DATA_URL = "https://nguyenminhthanh0403-hub.github.io/claudekit/bullion-live-map/data.json"
+BULLION_DATA_URL = "https://sinbadtheexplorer.github.io/claudekit/bullion-live-map/data.json"
 DAILY_STALENESS_CEILING_DAYS = 5
 WEEKLY_STALENESS_CEILING_DAYS = 10
 

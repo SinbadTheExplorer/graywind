@@ -26,7 +26,7 @@ import requests
 NEWS_DEBATE_MODEL = "deepseek-v4-flash"
 NEWS_DEBATE_MAX_TOKENS = 1024
 
-BULLION_NEWS_URL = "https://nguyenminhthanh0403-hub.github.io/claudekit/bullion-live-map/news.json"
+BULLION_NEWS_URL = "https://sinbadtheexplorer.github.io/claudekit/bullion-live-map/news.json"
 STALENESS_CEILING_HOURS = 48
 
 SUBMIT_EVENTS_TOOL_NAME = "submit_macro_events"

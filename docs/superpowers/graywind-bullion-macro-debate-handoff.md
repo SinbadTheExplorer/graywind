@@ -43,12 +43,12 @@ caveats"; neither is a defect in this code.
    after Task 5, +2 from the final-review fix wave's new tests: an out-of-range-probability
    test and an empty-headlines test).
 4. **Immediate next action — check both blockers before assuming either is fixed:**
-   - `gh secret list --repo nguyenminhthanh0403-hub/graywind` — confirm whether
+   - `gh secret list --repo SinbadTheExplorer/graywind` — confirm whether
      `DEEPSEEK_API_KEY` has been added. As of 2026-09-13 it is **absent** (list shows only
      `ALPACA_API_KEY`, `ALPACA_API_KEY_SMALL`, `ALPACA_API_SECRET`,
      `ALPACA_API_SECRET_SMALL`, `CLOUDFARE_API_KEY`, `FINNHUB_API_KEY`, `FRED_API_KEY` — no
      `DEEPSEEK_API_KEY`).
-   - `curl -s https://nguyenminhthanh0403-hub.github.io/claudekit/bullion-live-map/news.json`
+   - `curl -s https://sinbadtheexplorer.github.io/claudekit/bullion-live-map/news.json`
      and inspect `generated_at` — as of 2026-09-13 it is still `2026-09-05T00:02:31Z`,
      unchanged across multiple checks spanning at least 2026-09-12 through 2026-09-13 (now
      8+ days stale against this feature's 48h ceiling). The value not moving at all across a
@@ -188,7 +188,7 @@ Since the prior handoff (`15164cb`, still on the feature branch):
    shared with `news_debate.py`) — without this, `run_macro_debate_cycle` never executes at
    all, regardless of Bullion's feed state.
 2. **Separately, check whether Bullion's news cron has been fixed:**
-   `curl -s https://nguyenminhthanh0403-hub.github.io/claudekit/bullion-live-map/news.json`
+   `curl -s https://sinbadtheexplorer.github.io/claudekit/bullion-live-map/news.json`
    and inspect `generated_at` — needs to be within 48h of the check time. Both #1 and #2
    must be true before a row can appear.
 3. **Push local `main` to `origin/main`** (`git push origin main`) — currently 12 commits
@@ -205,11 +205,11 @@ Since the prior handoff (`15164cb`, still on the feature branch):
 
 - Test suite: `.venv/bin/python -m pytest tests/ -q` — `526 passed` as of this session.
 - **Checking real repo secrets (names only, never values):** `gh secret list --repo
-  nguyenminhthanh0403-hub/graywind` works directly in this environment (`gh` CLI installed
+  SinbadTheExplorer/graywind` works directly in this environment (`gh` CLI installed
   and authenticated) — this corrects the older `news_debate.py` handoff's claim that `gh`
   isn't available; that was true in whatever environment wrote that handoff, not this one.
 - Bullion feed staleness check: `curl -s
-  https://nguyenminhthanh0403-hub.github.io/claudekit/bullion-live-map/news.json | head -c
+  https://sinbadtheexplorer.github.io/claudekit/bullion-live-map/news.json | head -c
   400` and read `generated_at` — no auth needed, public GitHub Pages URL.
 - Ahead/behind state against `origin/main`: `git status --short --branch` or `git log
   --oneline origin/main..HEAD` — don't assume `main == origin/main` without checking; this

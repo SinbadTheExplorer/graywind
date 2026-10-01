@@ -31,7 +31,7 @@ than a $100k one.
    'origin/worktree-graywind-yahoo-analyst-consensus'".
 3. **Immediate next action:** open the PR. It was not created in this session — no `gh` CLI or
    API credentials were available in the sandbox this was written from. The compare URL is:
-   `https://github.com/nguyenminhthanh0403-hub/graywind/compare/main...worktree-graywind-yahoo-analyst-consensus?expand=1`
+   `https://github.com/SinbadTheExplorer/graywind/compare/main...worktree-graywind-yahoo-analyst-consensus?expand=1`
    A draft title and body were already handed to the user in this session's chat (not
    repeated here — if you need it and don't have the chat, just write a PR summarizing the two
    features from their specs).
@@ -136,10 +136,10 @@ pre-existing tracks.
 - No `gh` CLI in this sandbox — check GitHub Actions run history via the public REST API (works
   unauthenticated for a public repo):
   ```
-  curl -s "https://api.github.com/repos/nguyenminhthanh0403-hub/graywind/actions/workflows/live-trading.yml/runs?per_page=10" \
+  curl -s "https://api.github.com/repos/SinbadTheExplorer/graywind/actions/workflows/live-trading.yml/runs?per_page=10" \
     | python3 -c "import json,sys; d=json.load(sys.stdin); [print(r['run_number'], r['status'], r['conclusion'], r['event'], r['created_at']) for r in d['workflow_runs']]"
   ```
-- Live public dashboard: `https://nguyenminhthanh0403-hub.github.io/graywind/`.
+- Live public dashboard: `https://sinbadtheexplorer.github.io/graywind/`.
 - This worktree's sandbox cannot run git commands against the main checkout
   (`/Users/thanhnguyen/Projects/graywind`) — any `git -C <path-outside-this-worktree>` or `cd`
   out of `/Users/thanhnguyen/Projects/graywind/.claude/worktrees/graywind-yahoo-analyst-consensus`

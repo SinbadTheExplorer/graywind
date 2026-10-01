@@ -164,7 +164,7 @@ unrelated to this work.
 - YAML: `.venv/bin/python -c "import yaml; yaml.safe_load(open('.github/workflows/live-trading.yml'))"`.
 - Live state: always `git show origin/main:<path>`, never the local checkout.
 - GitHub Actions run history (public API, unauthenticated):
-  `curl -s "https://api.github.com/repos/nguyenminhthanh0403-hub/graywind/actions/workflows/live-trading.yml/runs?per_page=20"`.
+  `curl -s "https://api.github.com/repos/SinbadTheExplorer/graywind/actions/workflows/live-trading.yml/runs?per_page=20"`.
 - Checking real repo secrets (names only): `gh secret list` (needs `gh` CLI + auth, not
   available in this sandbox) or the GitHub UI directly.
 - Before starting related work, check `git branch -a` / `git worktree list` / `git log

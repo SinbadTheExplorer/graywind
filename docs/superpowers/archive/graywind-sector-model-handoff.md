@@ -30,7 +30,7 @@ should produce, not skip to implementing.
    commit should be `37101a6` ("Fix backtester lookahead bias, capital check, and drawdown
    blindness; fix Alpaca IEX feed"). Branch is `main`, no feature branch in flight.
 2. Check whether a real live cycle has run yet: visit
-   `https://nguyenminhthanh0403-hub.github.io/graywind/` — if it still shows "no cycle has run
+   `https://sinbadtheexplorer.github.io/graywind/` — if it still shows "no cycle has run
    yet," the live loop has not successfully completed since this handoff (see caveat below on
    why that was likely broken until `37101a6`).
 3. Decide which thread you're resuming — live-cycle verification (small, concrete) or the
@@ -127,7 +127,7 @@ thread, unrelated to this session's work.
    scheduled run since `37101a6`. If it's still failing, debug from real error output, not
    assumption — the IEX fix was the most likely culprit but may not be the only one.
 2. Independently confirm the GitHub repo secrets are current (Settings → Secrets and
-   variables → Actions on `nguyenminhthanh0403-hub/graywind`).
+   variables → Actions on `SinbadTheExplorer/graywind`).
 3. Only once (1) and (2) are resolved: if picking up the sector-aware model thread, start with
    `superpowers:brainstorming` on the real question underneath the data above — is this a
    threshold-retuning problem (cheap, real overfitting risk) or a signal-logic problem (RSI/SMA

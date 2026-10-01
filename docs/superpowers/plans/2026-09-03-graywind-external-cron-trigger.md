@@ -81,7 +81,7 @@ Hit the Worker's `*.workers.dev` URL from Step 6 with a plain GET (browser, or `
 Then check GitHub Actions run history for `live-trading.yml` and confirm a new run appears with `"event": "workflow_dispatch"` within a minute or two:
 
 ```bash
-curl -s "https://api.github.com/repos/nguyenminhthanh0403-hub/graywind/actions/workflows/334898521/runs?per_page=3&event=workflow_dispatch" | python3 -c "
+curl -s "https://api.github.com/repos/SinbadTheExplorer/graywind/actions/workflows/334898521/runs?per_page=3&event=workflow_dispatch" | python3 -c "
 import json,sys
 d = json.load(sys.stdin)
 for r in d['workflow_runs']:

@@ -53,7 +53,7 @@ inventing criteria with no data to sanity-check them against.
   established error-handling convention) — the exception type is named separately, not
   reused, specifically so no future reader can copy-paste a `except MacroDataUnavailable`
   handler expecting closed-fail semantics onto this open-fail signal.
-- `BULLION_NEWS_URL = "https://nguyenminhthanh0403-hub.github.io/claudekit/bullion-live-map/news.json"`
+- `BULLION_NEWS_URL = "https://sinbadtheexplorer.github.io/claudekit/bullion-live-map/news.json"`
   — confirmed live 2026-09-12 (`curl` returned 200 with a `generated_at`/`headlines` JSON
   envelope, sibling to `macro_gate.py`'s `BULLION_DATA_URL`).
 - `STALENESS_CEILING_HOURS = 48` — matches `fetch_bullion_news.py`'s own `MAX_AGE_HOURS`
