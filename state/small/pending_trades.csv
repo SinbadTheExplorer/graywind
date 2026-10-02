@@ -1,2 +1,3 @@
 symbol,issue_number,side,qty,price_at_proposal,stop_price,target_price,tier,proposed_date
-SPY,46,buy,1.8337,763.47,,,1,2026-10-01
+SPY,49,buy,1.821,768.815,,,1,2026-10-02
+AAPL,,buy,0.5933,332.975,326.32,342.96,2,2026-10-02
