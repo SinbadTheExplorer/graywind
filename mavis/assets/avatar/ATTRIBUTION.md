@@ -147,6 +147,30 @@ Where to find models, and what each licence lets you do:
   terms on the model's page. Not yet tried here -- `panda3d-gltf` may need the
   `.vrm` renamed to `.glb`, and may ignore VRM-specific extensions.
 
+**Converting downloads.** Two tools cover what Sketchfab hands out:
+- a GLB that will not load (compressed geometry, WebP textures, several skins
+  on one skeleton, meshes beside their bones): `tools/fix_sketchfab_glb.py`,
+  after `npx -y @gltf-transform/cli@4 dequantize` if it is meshopt-compressed;
+- a "source" zip holding `model.dae` plus loose `*_albedo/_normal/_metallic/
+  _roughness/_emissive/_AO` images: `tools/collada_to_glb.py` (needs
+  `pip install trimesh pycollada pillow`), then gltf-transform `prune`.
+
+**A CC licence is not the whole question.** CC BY covers the *modeller's*
+rights only. A model of a franchise design -- Marvel's Hulkbuster, say --
+still carries the franchise owner's rights, so it is used locally and NEVER
+committed here, whatever its Sketchfab licence says. Same for anything whose
+licence you cannot confirm. Both are what the default ignore under `extra/`
+is for.
+
+Local-only drop-ins in use (2026-10-04), not committed:
+- `hulkbuster` -- "Hulkbuster's helmet MCU version" by el_robotto, CC BY 4.0,
+  https://sketchfab.com/3d-models/hulkbusters-helmet-mcu-version-63e0d0c4b342413eaeb9528fdd851311
+  -- Marvel design, so local only. Static; nods. Centred close-up
+  (`portal_framing` 1.7, `portal_rise` 0.02).
+- `zbrush-mech` -- from a Sketchfab source zip named
+  "zbrush-for-concept-mech-design-dver"; author and licence NOT yet
+  confirmed, so local only until they are. Static; nods.
+
 Model size matters on the 8GB M2: Panda3D keeps every model it has loaded
 cached in memory, so cycling through several 80MB models adds up.
 
