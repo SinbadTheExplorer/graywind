@@ -132,9 +132,13 @@ Let the inspector write `avatar.json` for you, then fix the credit by hand:
 | `model` | yes | file name inside the folder: `.glb`, `.gltf` or `.bam` |
 | `credit` | yes | shown on screen. For CC BY models the credit IS the licence condition |
 | `head_mesh` | no | mesh to frame on; without it the top 19% of the model is assumed to be the head |
-| `mouth` | no | `{"kind": "slider", "slider": "jawOpen"}` (a morph), `{"kind": "joint", "joint": "...", "axis": "p", "degrees": 14}` (a jaw bone), or omit for no lip-sync |
+| `mouth` | no | `{"kind": "slider", "slider": "jawOpen"}` (a morph), `{"kind": "joint", "joint": "...", "axis": "p", "degrees": 14}` (a jaw bone), `{"kind": "nod", "degrees": 3}` (the whole model dips with his voice), or omit for no lip-sync |
 | `idle_anim` | no | clip to loop; without one he holds still and sways |
 | `anims`, `idle_variety`, `poses`, `sway` | no | as in the built-in `keanu` entry in `avatar/scene.py` |
+
+**Models with no skeleton work too** -- a static mesh, which is what most
+mech/robot heads are. They load, sway, and nod along with his voice instead
+of lip-syncing (any `mouth` setting is replaced by `nod` for them).
 
 A folder with a broken or incomplete `avatar.json` is skipped with a printed
 reason; it never stops Johnny from starting. A model that fails to *load*

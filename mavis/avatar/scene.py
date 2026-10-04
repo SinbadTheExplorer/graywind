@@ -333,7 +333,26 @@ class _NoMouth:
         pass
 
 
-_DRIVERS = {"slider": _SliderMouth, "joint": _JawMouth, "none": _NoMouth}
+class _NodMouth:
+    """For a model with NO skeleton -- a static mesh, like a mech head.
+
+    There is nothing to open, so speech becomes a small nod of the whole
+    model in time with the voice. A head that stays dead still while words
+    come out reads as a speaker grille; one that dips with the syllables
+    reads as the one talking.
+    """
+
+    def __init__(self, actor, bundle, config):
+        self._actor = actor
+        self._degrees = config.get("degrees", 3.0)
+        self.sliders = []
+
+    def set(self, amount: float) -> None:
+        self._actor.set_p(max(0.0, min(1.0, amount)) * self._degrees)
+
+
+_DRIVERS = {"slider": _SliderMouth, "joint": _JawMouth, "none": _NoMouth,
+            "nod": _NodMouth}
 
 SWAY_RATE = 0.4
 
@@ -491,12 +510,21 @@ class AvatarScene:
         self.actor = load_actor(self.base.loader, name, self.registry)
         self.actor.reparent_to(self.base.render)
 
-        character = self.actor.find("**/+Character").node()
-        self._character = character
-        self._bundle = character.getBundle(0)
+        character = self.actor.find("**/+Character")
+        mouth_config = self.config["mouth"]
+        if character.is_empty():
+            # A static mesh (no skeleton): nothing to animate or open. It
+            # still loads, sways and nods along when he speaks.
+            self._character = None
+            self._bundle = None
+            if mouth_config.get("kind") != "nod":
+                mouth_config = {"kind": "nod"}
+        else:
+            self._character = character.node()
+            self._bundle = self._character.getBundle(0)
 
-        self.mouth = _DRIVERS[self.config["mouth"]["kind"]](
-            self.actor, self._bundle, self.config["mouth"]
+        self.mouth = _DRIVERS[mouth_config["kind"]](
+            self.actor, self._bundle, mouth_config
         )
         self.mouth_sliders = self.mouth.sliders
 
@@ -918,7 +946,7 @@ class AvatarScene:
         # exposeJoint returns a fresh node whether or not the joint exists --
         # on a miss it only warns, and the prop would hang motionless at the
         # actor's origin, in frame. Ask the bundle directly instead.
-        if self._bundle.find_child(config["joint"]) is None:
+        if self._bundle is None or self._bundle.find_child(config["joint"]) is None:
             return None
         hand = self.actor.expose_joint(None, "modelRoot", config["joint"])
         if hand is None or hand.is_empty():

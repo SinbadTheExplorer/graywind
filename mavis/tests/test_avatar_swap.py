@@ -145,3 +145,29 @@ def test_next_avatar_is_none_with_a_single_model(base):
     sc = scene.AvatarScene(base, "jonny", registry=reg)
     assert sc.next_avatar() is None
     sc._teardown()
+
+
+@pytest.fixture(scope="module")
+def static_registry(base, tmp_path_factory):
+    """A model with no skeleton at all -- what a mech head usually is."""
+    path = tmp_path_factory.mktemp("static") / "box.bam"
+    base.loader.load_model("models/box").write_bam_file(str(path))
+    return {"jonny": scene.AVATARS["jonny"],
+            "box": {"path": str(path), "credit": "Model: box (test)",
+                    "mouth": {"kind": "none"}, "sway": 3.0}}
+
+
+@pytest.mark.parametrize("screen", [None, portal.Screen()], ids=["overlay", "portal"])
+def test_a_model_without_a_skeleton_loads_and_nods_when_he_talks(base, static_registry, screen):
+    """It used to die on find('**/+Character').node() -- an empty NodePath."""
+    sc = scene.AvatarScene(base, "box", portal=screen, registry=static_registry)
+    assert sc._bundle is None and not sc.animated
+    sc.set_mouth(1.0)
+    assert sc.actor.get_p() == pytest.approx(3.0)
+    sc.set_mouth(0.0)
+    assert sc.actor.get_p() == pytest.approx(0.0)
+    sc.idle(2.0)                            # sways, does not crash
+    sc.swap("jonny")
+    sc.swap("box")
+    assert sc.name == "box"
+    sc._teardown()

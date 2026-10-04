@@ -40,17 +40,22 @@ def inspect(path: str) -> dict:
     # Panda3D searches its model path, not the working directory, so a
     # relative path that exists right here still comes back "not found".
     actor = Actor(Filename.from_os_specific(str(Path(path).resolve())))
-    bundle = actor.find("**/+Character").node().getBundle(0)
+    character = actor.find("**/+Character")
+    rigged = not character.is_empty()
 
     meshes = sorted({g.getName() for g in actor.findAllMatches("**/+GeomNode")})
-    sliders = sorted(set(_all_sliders(bundle, [])))
-    joints = [j.getName() for j in actor.getJoints()]
+    sliders = (sorted(set(_all_sliders(character.node().getBundle(0), [])))
+               if rigged else [])
+    joints = [j.getName() for j in actor.getJoints()] if rigged else []
     anims = list(actor.getAnimNames())
 
     head = next((m for m in meshes if "head" in m.lower()), None)
     jaw = next((j for j in joints if "jaw" in j.lower()), None)
     morph = next((m for m in MOUTH_MORPHS if m in sliders), None)
-    if morph:
+    if not rigged:
+        # No skeleton: a static mesh. It nods along with speech instead.
+        mouth = {"kind": "nod", "degrees": 3.0}
+    elif morph:
         mouth = {"kind": "slider", "slider": morph, "gain": 1.0}
     elif jaw:
         # Axis and travel differ per rig: render with tools/render_pose.py
@@ -60,6 +65,8 @@ def inspect(path: str) -> dict:
         mouth = {"kind": "none"}
     idle = next((a for a in anims if "idle" in a.lower()), anims[0] if anims else None)
 
+    print(f"rigged  {rigged}" + ("" if rigged else
+          "  (static mesh: no lip-sync or clips; it will sway and nod)"))
     print(f"meshes  ({len(meshes)}): {meshes}")
     print(f"morphs  ({len(sliders)}): {sliders}")
     print(f"joints  ({len(joints)}), jaw-like: {[j for j in joints if 'jaw' in j.lower()]}")
