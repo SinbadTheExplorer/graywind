@@ -175,8 +175,8 @@ PORTAL_RISE = 0.21
 EXTRA_DIR = ASSET_DIR / "extra"
 # What a drop-in model's avatar.json may say. Only `model` and `credit` are
 # required; see assets/avatar/ATTRIBUTION.md, "Adding your own models".
-_EXTRA_KEYS = {"model", "credit", "head_mesh", "mouth", "idle_anim", "anims",
-               "idle_variety", "poses", "sway"}
+_EXTRA_KEYS = {"model", "credit", "head_mesh", "head_fraction", "mouth",
+               "idle_anim", "anims", "idle_variety", "poses", "sway"}
 
 
 def _read_extra(folder: Path):
@@ -697,8 +697,13 @@ class AvatarScene:
                 else self.actor.find("**/__no_head_mesh__"))
 
         if head.is_empty():
+            # No named head mesh: assume the top HEAD_FRACTION of the model is
+            # the head. Right for a full figure, badly wrong for a BUST, which
+            # is mostly head -- framing its top 19% zooms into the helmet. A
+            # drop-in sets `head_fraction` (~0.5 for a bust) to say so.
+            fraction = float(self.config.get("head_fraction", HEAD_FRACTION))
             low, high = self.actor.get_tight_bounds()
-            head_height = max(high[2] - low[2], 1e-3) * HEAD_FRACTION
+            head_height = max(high[2] - low[2], 1e-3) * fraction
             center_z = high[2] - head_height / 2.0
         else:
             low, high = head.get_tight_bounds(self.actor)
@@ -759,11 +764,19 @@ class AvatarScene:
         # The room is what the window reveals at his depth (see stage), so
         # he always fits inside it however he is framed.
         reveal = (eye_distance + PORTAL_DEPTH) / eye_distance
-        # His feet, with a hair of clearance so the soles do not z-fight.
+        # The floor goes at his feet (a hair below, so soles do not z-fight)
+        # -- but never ABOVE the lowest point the window shows at the back
+        # wall from the nominal eye. A full figure's feet are always below
+        # that; a BUST's base is not, and a floor at its base filled the
+        # bottom of the window with a flat grey slab. Lower, it is out of
+        # sight and a bust floats in the dark as the reel's mech does.
+        back_reveal = (eye_distance + self.room_depth) / eye_distance
+        floor_z = min(low[2] - 0.002,
+                      -screen.height / 2.0 * back_reveal - 0.01)
         self.room = stage.build_room(
             self.base.render, screen, width=screen.width * reveal,
             top=max(screen.height / 2.0 * reveal, high[2] + 0.01),
-            depth=self.room_depth, floor_z=low[2] - 0.002)
+            depth=self.room_depth, floor_z=floor_z)
 
     def look_from(self, eye) -> None:
         """Redraw the window as seen from `eye` (portal frame, metres).

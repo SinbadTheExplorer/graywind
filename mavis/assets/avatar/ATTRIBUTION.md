@@ -131,7 +131,8 @@ Let the inspector write `avatar.json` for you, then fix the credit by hand:
 |---|---|---|
 | `model` | yes | file name inside the folder: `.glb`, `.gltf` or `.bam` |
 | `credit` | yes | shown on screen. For CC BY models the credit IS the licence condition |
-| `head_mesh` | no | mesh to frame on; without it the top 19% of the model is assumed to be the head |
+| `head_mesh` | no | mesh to frame on; without it the top `head_fraction` of the model is assumed to be the head |
+| `head_fraction` | no | used only without `head_mesh`: 0.19 (default) for a full figure, ~0.5 for a bust, ~0.9 for a head alone |
 | `mouth` | no | `{"kind": "slider", "slider": "jawOpen"}` (a morph), `{"kind": "joint", "joint": "...", "axis": "p", "degrees": 14}` (a jaw bone), `{"kind": "nod", "degrees": 3}` (the whole model dips with his voice), or omit for no lip-sync |
 | `idle_anim` | no | clip to loop; without one he holds still and sways |
 | `anims`, `idle_variety`, `poses`, `sway` | no | as in the built-in `keanu` entry in `avatar/scene.py` |

@@ -78,6 +78,12 @@ def inspect(path: str) -> dict:
             "credit": "Model: TITLE by AUTHOR (LICENCE) -- EDIT ME"}
     if head:
         spec["head_mesh"] = head
+    else:
+        # Without a head mesh the framing assumes a full figure (head = top
+        # 19%). Busts and heads are far more head than that.
+        spec["head_fraction"] = 0.19
+        print("no head mesh found: set head_fraction to ~0.5 for a bust, "
+              "~0.9 for a head on its own, 0.19 for a full figure")
     spec["mouth"] = mouth
     if idle:
         spec["idle_anim"] = idle

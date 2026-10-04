@@ -171,3 +171,35 @@ def test_a_model_without_a_skeleton_loads_and_nods_when_he_talks(base, static_re
     sc.swap("box")
     assert sc.name == "box"
     sc._teardown()
+
+
+def test_head_fraction_frames_a_bust_on_more_of_the_model(base, static_registry):
+    """A bust framed as a full figure zooms into the top of its helmet."""
+    full = scene.AvatarScene(base, "box", registry=static_registry)
+    full_head = full._measure_head()[3]
+    full._teardown()
+    bust_reg = dict(static_registry,
+                    box=dict(static_registry["box"], head_fraction=0.5))
+    bust = scene.AvatarScene(base, "box", registry=bust_reg)
+    assert bust._measure_head()[3] == pytest.approx(full_head * 0.5 / scene.HEAD_FRACTION)
+    bust._teardown()
+
+
+def test_head_fraction_is_an_accepted_drop_in_key(tmp_path):
+    _drop_in(tmp_path, "bust", head_fraction=0.5)
+    assert scene.all_avatars(tmp_path)["bust"]["head_fraction"] == 0.5
+
+
+def test_floor_is_out_of_sight_even_under_a_short_model(base, static_registry):
+    """A bust's base is inside the window; a floor there filled the bottom
+    third of the screen with a grey slab."""
+    screen = portal.Screen()
+    sc = scene.AvatarScene(base, "box", portal=screen, registry=static_registry)
+    floor = sc.room.find("floor")
+    floor_z = floor.get_z(base.render)
+    eye_y = screen.nominal_eye[1]
+    # Where the floor's far edge (at the back wall) crosses the glass, as
+    # seen from the nominal eye: must be below the window's bottom edge.
+    at_glass = floor_z * (-eye_y) / (sc.room_depth - eye_y)
+    assert at_glass < -screen.height / 2
+    sc._teardown()
