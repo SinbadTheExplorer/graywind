@@ -6,7 +6,7 @@ left, right, up, close -- side by side in one PNG. If it is working, the
 window's EDGES stay put in every tile while the room and Johnny slide behind
 them, and the side walls open up on the side you lean away from.
 
-  tools/render_portal.py --avatar jonny --out /tmp/portal.png
+  tools/render_portal.py --avatar mech-bust --out /tmp/portal.png
 
 No webcam involved: `look_from` is fed the eyes directly.
 """
@@ -39,7 +39,7 @@ EYES = {
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--avatar", default="keanu")
+    ap.add_argument("--avatar", default="mech-bust")
     ap.add_argument("--out", default="/tmp/portal.png")
     ap.add_argument("--clip", default=None, help="hold this clip's frame 0")
     args = ap.parse_args()

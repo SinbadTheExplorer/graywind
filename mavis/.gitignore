@@ -9,7 +9,6 @@ __pycache__/
 # Build artifacts (*_fixed.glb, *.bam) are regenerable and never committed.
 assets/avatar/*
 !assets/avatar/ATTRIBUTION.md
-!assets/avatar/jonny.glb
 # Drop-ins live under extra/ and stay ignored, except a CC BY one recorded in
 # ATTRIBUTION.md. (Re-including a file needs its parent directories back too.)
 !assets/avatar/extra/

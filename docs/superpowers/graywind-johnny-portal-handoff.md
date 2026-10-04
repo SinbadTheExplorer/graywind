@@ -146,6 +146,28 @@ on it, on the Mac.
 - **Caveat:** Panda3D's ModelPool keeps every loaded model in RAM. On the 8GB
   M2, cycling through many large models adds up.
 
+## The mech is the default; the free Johnny is gone (2026-10-04)
+
+At the owner's request ("remove the old johnny model, focus on the mech"):
+
+- **Removed:** `assets/avatar/jonny.glb` (Stuxed, CC BY), its `AVATARS`
+  entry, its ATTRIBUTION section and unignore line, and `tools/repair_gltf.py`
+  + its tests, which existed only to repair that one file.
+- **Default is now `mech-bust`** (`PREFERENCE = ("mech-bust", "keanu")`). The
+  DeviantArt `keanu` is still loaded with M or `MAVIS_AVATAR=keanu` on the Mac.
+- **Tests moved onto the mech** (the only rigged committed model). Assertions
+  are from measurement: 54 joints, jaw opens ~11k of 53k head vertices.
+- **Lost coverage, on purpose:** the `slider` (morph-target) mouth driver no
+  longer has a committed model. Neither remaining model uses it.
+- **Two latent bugs found by the move, both fixed and mutation-checked:**
+  - `_IdleMotion` counted ABSENT joints as driven: `controlJoint` returns a
+    dummy node rather than failing. The old test only passed because the free
+    model had no idle channels. Now checked with `bundle.find_child`.
+  - Default portal framing let a DEEP head poke out of the window top (the
+    mech's crest by 2.8mm): `_keep_head_in_window` lowers him until every
+    corner of the head is inside from the nominal eye. Skipped when a model
+    sets `portal_rise` (the mech crops on purpose, as the reel does).
+
 ## UNVERIFIED (needs the owner, on the Mac)
 
 - **Everything with a real webcam.** The cloud box has no camera. The maths is

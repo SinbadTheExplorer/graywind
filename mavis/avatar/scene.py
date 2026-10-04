@@ -1,20 +1,20 @@
 """The Panda3D side of the avatar: window, model, idle motion, mouth.
 
-Two different models are supported because they move their mouths in
-completely different ways, and because only one of them may be committed.
+Models (more drop in under assets/avatar/extra/ -- see ATTRIBUTION.md):
 
-* **jonny** -- the Stuxed Sketchfab model, CC BY, in the repo. A Ready Player
-  Me export, so the mouth is a `mouthOpen` *morph target*.
-* **keanu** -- the KonnieGFX port of CD Projekt Red's actual character. Far
-  better likeness, but it is an extracted game asset and this repository is
-  public, so it is gitignored and exists only on machines that build it. It
-  carries no morph targets at all; Cyberpunk animates faces with *joints*,
-  which is why its facial rig survived extraction. The mouth is a rotation of
-  `mid_J_jaw_JNT`.
+* **mech-bust** -- "Mech bust" by Just8, CC BY 4.0, committed under
+  assets/avatar/extra/. The model from the off-axis reel, and the DEFAULT.
+  Rigged and animated; the mouth is a rotation of its `jaw_07` joint.
+* **keanu** -- the KonnieGFX port of CD Projekt Red's actual character. It
+  is an extracted game asset and this repository is public, so it is
+  gitignored and exists only on machines that build it. Its mouth is a
+  rotation of `mid_J_jaw_JNT`.
 
-The test suite can therefore only ever run against `jonny`, which is why both
-mechanisms stay supported rather than the better model simply replacing the
-other. Tests pin their model explicitly; nothing should rely on the default.
+The mech is the only rigged model a fresh clone has, so it is what the test
+suite loads. Tests pin their model explicitly; nothing should rely on the
+default. (A third, the free Sketchfab "Jonny Silverhand", was removed on
+2026-10-04 at the owner's request. It was the only morph-target mouth, so the
+`slider` driver below no longer has a committed model to test against.)
 
 Whichever mechanism is used, the mouth only moves if the character's
 `PartBundle` is told to `forceUpdate()`. Neither writing a slider nor rotating
@@ -124,20 +124,12 @@ AVATARS = {
                  "pos": (0.01020, -0.01338, 0.00348), "hpr": (152.5, 90.0, -61.7),
                  "clips": ("smoking",)},
     },
-    "jonny": {
-        "bam": "jonny_fixed.bam",
-        "head_mesh": "Wolf3D_Head",
-        # A Ready Player Me skeleton: none of the joints above exist on it, so
-        # it degrades to the whole-actor sway and nothing is driven per-joint.
-        "idle": (),
-        "sway": 12.0,
-        "credit": 'Model: "Jonny Silverhand" by Stuxed (CC BY)',
-        "mouth": {"kind": "slider", "slider": "mouthOpen", "gain": 1.0},
-    },
 }
 
-# Best-looking first. `MAVIS_AVATAR` overrides; tests pass a name directly.
-PREFERENCE = ("keanu", "jonny")
+# The default first, then the rest in switching order. `MAVIS_AVATAR`
+# overrides; tests pass a name directly. mech-bust is a drop-in (it lives in
+# extra/ with its avatar.json) but it is committed, so it is always present.
+PREFERENCE = ("mech-bust", "keanu")
 
 HEAD_FRACTION = 0.19
 # How much of the view the head spans: the framed height is this many head
@@ -254,7 +246,7 @@ def choose_avatar(registry: dict = None) -> str:
             )
         return requested
     built = available_avatars(registry)
-    return built[0] if built else PREFERENCE[-1]
+    return built[0] if built else PREFERENCE[0]
 
 
 def load_actor(loader, name: str, registry: dict = None) -> Actor:
@@ -401,6 +393,11 @@ class _IdleMotion:
         controlled = {}
 
         for name, axis, degrees, period, phase in channels:
+            if name not in controlled and bundle.find_child(name) is None:
+                # controlJoint does NOT fail on a missing joint: it hands
+                # back a fresh dummy node, so checking its result (as this
+                # once did) let every absent joint through as "driven".
+                controlled[name] = None
             if name not in controlled:
                 node = actor.controlJoint(None, "modelRoot", name)
                 controlled[name] = (
@@ -768,6 +765,9 @@ class AvatarScene:
         self.actor.set_scale(scale)
         self.actor.set_pos(-center_x * scale, -center_y * scale, -center_z * scale)
 
+        if "portal_rise" not in self.config:
+            self._keep_head_in_window(eye_distance)
+
         low, high = self.actor.get_tight_bounds(self.base.render)
         self.room_depth = max(high[1], PORTAL_DEPTH) + stage.BACK_GAP
         # The room is what the window reveals at his depth (see stage), so
@@ -786,6 +786,31 @@ class AvatarScene:
             self.base.render, screen, width=screen.width * reveal,
             top=max(screen.height / 2.0 * reveal, high[2] + 0.01),
             depth=self.room_depth, floor_z=floor_z)
+
+    def _keep_head_in_window(self, eye_distance: float, margin: float = 0.002) -> None:
+        """Lower him until the whole head is inside the glass from the nominal eye.
+
+        PORTAL_RISE places the head's CENTRE. A deep head (the mech's crest
+        reaches well forward of its centre) has its front nearer the glass,
+        where it looks bigger and higher, and poked 2.8mm out of the top.
+        Checked against every corner of the head's box. A model that sets its
+        own `portal_rise` is cropping on purpose and is left alone.
+        """
+        head_mesh = self.config.get("head_mesh")
+        head = self.actor.find(f"**/{head_mesh}") if head_mesh else self.actor
+        low, high = head.get_tight_bounds(self.base.render)
+        top = self.portal.height / 2.0 - margin
+        worst = 0.0
+        for y in (low[1], high[1]):
+            if y <= 0:
+                continue
+            # Where the ray from the eye to the head's top edge crosses the glass.
+            at_glass = high[2] * eye_distance / (y + eye_distance)
+            if at_glass > top:
+                # Drop needed at this depth to bring that edge onto the line.
+                worst = max(worst, (at_glass - top) * (y + eye_distance) / eye_distance)
+        if worst:
+            self.pivot.set_z(self.pivot.get_z() - worst)
 
     def look_from(self, eye) -> None:
         """Redraw the window as seen from `eye` (portal frame, metres).

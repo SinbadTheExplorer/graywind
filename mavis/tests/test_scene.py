@@ -23,14 +23,14 @@ def base():
 
 @pytest.fixture(scope="module")
 def avatar(base):
-    """Always the committed CC-BY model.
+    """Always the committed CC BY mech.
 
     `keanu` is gitignored -- it is an extracted CD Projekt Red asset and this
     repo is public -- so it is absent on a fresh clone and cannot be what the
     suite asserts against. Pinning also stops these tests from silently
     changing meaning on a machine that happens to have built the other model.
     """
-    return scene.AvatarScene(base, "jonny")
+    return scene.AvatarScene(base, "mech-bust")
 
 
 def _vertices(actor, mesh):
@@ -46,34 +46,37 @@ def _vertices(actor, mesh):
 
 
 def test_actor_loads_with_full_skeleton(avatar):
-    assert len(avatar.actor.getJoints()) >= 77
+    # 53 bones of its own plus the Armature root fix_sketchfab_glb adds.
+    assert len(avatar.actor.getJoints()) == 54
 
 
-def test_mouth_sliders_are_found(avatar):
-    """Sliders live in the PartBundle, not the scene graph -- a
-    findAllMatches("**/+CharacterSlider") search returns zero and is the
-    reason an earlier session wrongly concluded this model had no morphs."""
-    assert len(avatar.mouth_sliders) == 5
+def test_mouth_is_the_jaw_joint(avatar):
+    assert type(avatar.mouth).__name__ == "_JawMouth"
+    assert avatar.config["mouth"]["joint"] == "jaw_07"
 
 
 def test_set_mouth_moves_head_geometry(avatar):
+    """Measured: opening the jaw moves ~11k of the first head mesh's 53k
+    vertices. A jaw rotation that never reaches the vertices -- the missing
+    forceUpdate() trap -- moves none."""
+    head = avatar.config["head_mesh"]
     avatar.set_mouth(0.0)
-    closed = _vertices(avatar.actor, "Wolf3D_Head")
+    closed = _vertices(avatar.actor, head)
     avatar.set_mouth(1.0)
-    opened = _vertices(avatar.actor, "Wolf3D_Head")
+    opened = _vertices(avatar.actor, head)
+    avatar.set_mouth(0.0)
 
     moved = sum(1 for a, b in zip(closed, opened) if a != b)
-    assert moved > 500
+    assert moved > 5000
 
 
 def test_no_mesh_escapes_the_model_bounds(avatar):
-    """Guards the built .bam, not the repair tool's GLB output.
+    """A whole-model sanity check on what panda3d-gltf actually built.
 
-    The .bam is a gitignored artifact rebuilt by whatever panda3d-gltf is
-    installed, and every other test here samples only Wolf3D_Head. All of them
-    passed while Wolf3D_Outfit_Bottom was exploded to +/-18 units by a
-    mis-strided read -- the only symptom was a human noticing a grey mass on
-    screen. A whole-model sanity check catches that class headlessly.
+    A mis-strided or mis-skinned read does not fail loudly: an earlier model
+    loaded with one mesh exploded to +/-18 units, and the only symptom was a
+    human noticing a grey mass on screen. Every mesh must fit inside the
+    model, and the model must be roughly person-sized (the mech is 1.36).
     """
     low, high = avatar.actor.get_tight_bounds()
     height = high[2] - low[2]
@@ -89,11 +92,11 @@ def test_no_mesh_escapes_the_model_bounds(avatar):
 
 def test_set_mouth_clamps_negative_input(avatar):
     avatar.set_mouth(-5.0)
-    assert avatar.mouth_sliders[0].getValue() == 0.0
+    assert avatar.mouth._joint.get_r() == pytest.approx(avatar.mouth._rest)
 
 
 def test_attribution_text_is_present(avatar):
-    assert "Stuxed" in avatar.credit.getText()
+    assert avatar.credit.getText() == 'Model: "Mech bust" by Just8 (CC BY 4.0)'
 
 
 def _at(sc, t, clip="idle"):
@@ -313,20 +316,23 @@ def test_pbr_shader_initialises_once_per_window(base, monkeypatch):
     monkeypatch.setattr(base, "win", object(), raising=False)
     monkeypatch.setattr(base, "_mavis_pbr_pipeline", None, raising=False)
 
-    first = scene.AvatarScene(base, "jonny")
-    second = scene.AvatarScene(base, "jonny")
+    first = scene.AvatarScene(base, "mech-bust")
+    second = scene.AvatarScene(base, "mech-bust")
 
     assert len(calls) == 1, f"simplepbr.init called {len(calls)} times"
     assert first.pipeline is second.pipeline
 
 
-def test_idle_degrades_on_a_model_without_those_joints(avatar):
-    """The idle channels name CDPR/Valve bones. jonny is a Ready Player Me
-    skeleton that shares none of them, and it is the only model the suite can
-    load -- so absent joints must be skipped silently, not raise."""
-    assert avatar.motion.driven == []
-    avatar.idle(0.0)
-    avatar.idle(3.7)
+def test_idle_degrades_on_a_model_without_those_joints(base):
+    """The idle channels name CDPR/Valve bones. The mech's skeleton shares
+    none of them, and it is the only rigged model the suite can load -- so
+    absent joints must be skipped silently, not raise."""
+    other = scene.AvatarScene(base, "mech-bust")
+    motion = scene._IdleMotion(other.actor, other._bundle, scene._KEANU_IDLE)
+    assert motion.driven == []
+    motion.apply(0.0)
+    motion.apply(3.7)
+    other._teardown()
 
 
 def test_idle_layers_more_than_one_frequency():

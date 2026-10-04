@@ -1,52 +1,16 @@
 # Avatar model attribution
 
-Two models are built in. `avatar/scene.py` picks `keanu` when it has been
-built and falls back to `jonny`; `MAVIS_AVATAR=<name>` overrides. More can be
+`mech-bust` (committed, below) is the default; `keanu` is used when built
+locally and chosen with M or `MAVIS_AVATAR=keanu`. The free Sketchfab "Jonny
+Silverhand" (Stuxed, CC BY) was removed on 2026-10-04 at the owner's request. More can be
 dropped in without code changes -- see "Adding your own models" at the end.
 Press **M** while he runs to cycle through every model on disk.
 
-**This directory is gitignored except for `ATTRIBUTION.md` and `jonny.glb`.**
+**This directory is gitignored except for `ATTRIBUTION.md` and the
+`extra/mech-bust/` model.**
 The repo is public, so committing a model publishes it. Only add an unignore
 line in `mavis/.gitignore` for an asset whose licence actually permits
 redistribution, and record it here when you do.
-
----
-
-## `jonny` — committed, CC BY
-
-"Jonny Silverhand" by **Stuxed**
-https://sketchfab.com/3d-models/jonny-silverhand-806032afcab34b118809e864a5c54ee4
-
-Licensed **CC Attribution (CC BY)**. Credit is a licence condition, so the
-on-screen credit in `avatar/scene.py` is required, not decorative. Do not
-remove it.
-
-A stylized fan interpretation, not screen-accurate — the creator notes the
-metal arm is on the wrong side. The base mesh is a Ready Player Me export,
-which is where the `Wolf3D_*` mesh names and the aliased UV sets come from.
-Being an RPM export is also why it has `mouthOpen`/`mouthSmile` **morph
-targets**, which is how its mouth moves.
-
-All 20 textures are embedded in the GLB's binary chunk as `bufferView`
-images — there are no external `uri` references, so `jonny.glb` is
-self-contained and can be moved without breaking texture resolution.
-
-`jonny.glb` is the Sketchfab "Original format" download and is the only model
-file here under version control. Rebuild its artifacts with:
-
-    .venv/bin/python -m tools.repair_gltf
-    .venv/bin/gltf2bam assets/avatar/jonny_fixed.glb assets/avatar/jonny_fixed.bam
-
-`gltf2bam` should print **no** `Could not find joint in jvtmap` warnings. An
-earlier revision of the repair produced ~189 of them and they were recorded
-here as harmless zero-weight joint indices. They were not harmless: they were
-a symptom of `Wolf3D_Outfit_Bottom` being read at the wrong stride, which also
-exploded that mesh to ±18 units and put the camera inside the geometry. If
-those warnings ever come back, the repair is wrong again — see
-`tools/repair_gltf.py` and `test_declared_attributes_fill_the_byte_stride`.
-
-**This is the only model the test suite may assert against**, because it is
-the only one present on a fresh clone.
 
 ---
 

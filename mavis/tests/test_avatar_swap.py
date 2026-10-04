@@ -12,16 +12,16 @@ from panda3d.core import LightAttrib  # noqa: E402
 
 from avatar import portal, scene  # noqa: E402
 
-JONNY_BAM = scene.ASSET_DIR / "jonny_fixed.bam"
+MECH = scene.EXTRA_DIR / "mech-bust" / "mech_bust.glb"
 
 
 def _drop_in(root, name, **spec):
     folder = root / name
     folder.mkdir(parents=True)
-    spec.setdefault("model", "model.bam")
+    spec.setdefault("model", "model.glb")
     spec.setdefault("credit", f"Model: {name} by somebody (CC BY)")
-    if spec["model"] == "model.bam":
-        (folder / "model.bam").write_bytes(JONNY_BAM.read_bytes())
+    if spec["model"] == "model.glb":
+        (folder / "model.glb").write_bytes(MECH.read_bytes())
     (folder / "avatar.json").write_text(json.dumps(spec))
     return folder
 
@@ -29,15 +29,17 @@ def _drop_in(root, name, **spec):
 @pytest.fixture(scope="module")
 def extra(tmp_path_factory):
     root = tmp_path_factory.mktemp("extra")
-    # A second, mouth-less copy of the CC-BY model: enough to prove a swap
-    # without needing the gitignored keanu.
-    _drop_in(root, "twin", head_mesh="Wolf3D_Head")
+    # A second, mouth-less copy of the committed mech: enough to prove a
+    # swap without needing the gitignored keanu.
+    _drop_in(root, "twin", head_mesh="mech_mech_head_mat_0")
     return root
 
 
 @pytest.fixture(scope="module")
 def registry(extra):
     reg = scene.all_avatars(extra)
+    # The committed mech lives in the REAL extra/, not this temp one.
+    reg["mech-bust"] = scene.all_avatars()["mech-bust"]
     # keanu is gitignored and may not exist; keep the order test hermetic.
     reg.pop("keanu", None)
     return reg
@@ -58,7 +60,7 @@ def _lights_on_render(base):
 def test_drop_in_folder_joins_the_registry(registry):
     assert "twin" in registry
     assert registry["twin"]["mouth"] == {"kind": "none"}
-    assert scene.available_avatars(registry) == ["jonny", "twin"]
+    assert scene.available_avatars(registry) == ["mech-bust", "twin"]
 
 
 @pytest.mark.parametrize("spec, reason", [
@@ -70,8 +72,8 @@ def test_a_bad_drop_in_is_skipped_not_fatal(tmp_path, spec, reason, capsys):
     if spec.get("credit", "x") is None:
         folder = tmp_path / "bad"
         folder.mkdir()
-        (folder / "model.bam").write_bytes(b"")
-        (folder / "avatar.json").write_text(json.dumps({"model": "model.bam"}))
+        (folder / "model.glb").write_bytes(b"")
+        (folder / "avatar.json").write_text(json.dumps({"model": "model.glb"}))
     else:
         _drop_in(tmp_path, "bad", **spec)
     assert "bad" not in scene.all_avatars(tmp_path), reason
@@ -87,15 +89,15 @@ def test_unreadable_json_is_skipped(tmp_path, capsys):
 
 
 def test_drop_in_cannot_shadow_a_built_in(tmp_path, capsys):
-    _drop_in(tmp_path, "jonny")
+    _drop_in(tmp_path, "keanu", model="absent.glb")
     reg = scene.all_avatars(tmp_path)
-    assert reg["jonny"] is scene.AVATARS["jonny"]
+    assert reg["keanu"] is scene.AVATARS["keanu"]
     assert "name taken" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("screen", [None, portal.Screen()], ids=["overlay", "portal"])
 def test_swap_replaces_the_model_and_leaves_nothing_behind(base, registry, screen):
-    sc = scene.AvatarScene(base, "jonny", portal=screen, registry=registry)
+    sc = scene.AvatarScene(base, "mech-bust", portal=screen, registry=registry)
     first_actor = sc.actor
     lights_before = _lights_on_render(base)
     rooms_before = base.render.find_all_matches("**/mavis-room").get_num_paths()
@@ -112,14 +114,14 @@ def test_swap_replaces_the_model_and_leaves_nothing_behind(base, registry, scree
         0 if screen is None else 1)
     sc.set_mouth(1.0)                       # the no-mouth driver: a no-op
 
-    sc.swap("jonny")                        # and back round the cycle
-    assert sc.name == "jonny" and len(sc.mouth_sliders) == 5
+    sc.swap("mech-bust")                    # and back round the cycle
+    assert sc.name == "mech-bust" and type(sc.mouth).__name__ == "_JawMouth"
     assert sc.next_avatar() == "twin"
     sc._teardown()
 
 
 def test_swap_keeps_him_hidden_while_asleep(base, registry):
-    sc = scene.AvatarScene(base, "jonny", registry=registry)
+    sc = scene.AvatarScene(base, "mech-bust", registry=registry)
     sc.hide()
     sc.swap("twin")
     assert sc.actor.is_hidden()
@@ -131,18 +133,18 @@ def test_a_model_that_fails_to_load_puts_the_previous_one_back(base, registry, t
     junk.write_bytes(b"not a model")
     reg = dict(registry, junk={"path": str(junk), "credit": "x",
                                "mouth": {"kind": "none"}})
-    sc = scene.AvatarScene(base, "jonny", registry=reg)
+    sc = scene.AvatarScene(base, "mech-bust", registry=reg)
     with pytest.raises(Exception):
         sc.swap("junk")
-    assert sc.name == "jonny"
+    assert sc.name == "mech-bust"
     assert not sc.actor.is_empty()
-    assert sc.credit.getText() == scene.AVATARS["jonny"]["credit"]
+    assert sc.credit.getText() == registry["mech-bust"]["credit"]
     sc._teardown()
 
 
 def test_next_avatar_is_none_with_a_single_model(base):
-    reg = {"jonny": scene.AVATARS["jonny"]}
-    sc = scene.AvatarScene(base, "jonny", registry=reg)
+    reg = {"mech-bust": scene.all_avatars()["mech-bust"]}
+    sc = scene.AvatarScene(base, "mech-bust", registry=reg)
     assert sc.next_avatar() is None
     sc._teardown()
 
@@ -152,7 +154,7 @@ def static_registry(base, tmp_path_factory):
     """A model with no skeleton at all -- what a mech head usually is."""
     path = tmp_path_factory.mktemp("static") / "box.bam"
     base.loader.load_model("models/box").write_bam_file(str(path))
-    return {"jonny": scene.AVATARS["jonny"],
+    return {"mech-bust": scene.all_avatars()["mech-bust"],
             "box": {"path": str(path), "credit": "Model: box (test)",
                     "mouth": {"kind": "none"}, "sway": 3.0}}
 
@@ -167,7 +169,7 @@ def test_a_model_without_a_skeleton_loads_and_nods_when_he_talks(base, static_re
     sc.set_mouth(0.0)
     assert sc.actor.get_p() == pytest.approx(0.0)
     sc.idle(2.0)                            # sways, does not crash
-    sc.swap("jonny")
+    sc.swap("mech-bust")
     sc.swap("box")
     assert sc.name == "box"
     sc._teardown()

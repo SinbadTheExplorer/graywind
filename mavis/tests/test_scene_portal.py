@@ -21,7 +21,14 @@ def base():
 
 @pytest.fixture(scope="module")
 def avatar(base):
-    return scene.AvatarScene(base, "jonny", portal=SCREEN)
+    """The mech with its own portal framing STRIPPED, so these tests pin the
+    default framing logic rather than one model's tuning (the mech's tight
+    close-up deliberately crops its crest, as the reel does)."""
+    reg = scene.all_avatars()
+    plain = {k: v for k, v in reg["mech-bust"].items()
+             if k not in ("portal_framing", "portal_rise")}
+    return scene.AvatarScene(base, "mech-bust", portal=SCREEN,
+                             registry=dict(reg, **{"mech-bust": plain}))
 
 
 def _head_bounds(avatar):
@@ -60,7 +67,7 @@ def test_head_is_visible_through_the_window_from_the_nominal_eye(avatar):
 
 def test_overlay_mode_is_untouched(base):
     """No portal: no room, no pivot, actor parented straight to render."""
-    overlay = scene.AvatarScene(base, "jonny")
+    overlay = scene.AvatarScene(base, "mech-bust")
     assert overlay.room is None and overlay.pivot is None
     assert overlay.actor.get_parent() == base.render
     overlay.look_from((0.2, -0.6, 0.0))     # a no-op, not an error
