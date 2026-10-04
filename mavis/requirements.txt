@@ -13,3 +13,8 @@ panda3d-simplepbr==0.13.1
 openwakeword==0.6.0
 sounddevice==0.5.3
 numpy==2.5.3
+# Portal mode's webcam head tracking (avatar/headtrack.py). Headless: the
+# avatar draws with Panda3D and never opens an OpenCV window, and the GUI
+# build drags in Qt, which fights Panda3D for the main run loop on macOS.
+# cp37-abi3 wheels, so this installs on any Python 3 Homebrew ships.
+opencv-python-headless==5.0.0.93

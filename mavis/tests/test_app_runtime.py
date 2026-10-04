@@ -77,3 +77,71 @@ def test_on_render_gives_up_once_shutting_down():
 
     with pytest.raises(RuntimeError, match="shutting down"):
         runtime.on_render(lambda: None)
+
+
+class PortalScene(CaptionScene):
+    def __init__(self):
+        super().__init__()
+        from avatar import portal
+        self.portal = portal.Screen()
+        self.views = []
+        self.notices = []
+
+    def idle(self, t):
+        pass
+
+    def look_from(self, eye):
+        self.views.append(eye)
+
+    def show_notice(self, text):
+        self.notices.append(text)
+
+
+class StubTracker:
+    def __init__(self, reading=(None, None), error=None):
+        self.reading = reading
+        self.error = error
+
+    def latest(self):
+        return self.reading
+
+
+def test_portal_runtime_feeds_the_tracked_eye_to_the_lens():
+    scene = PortalScene()
+    tracker = StubTracker(((0.1, -0.5, 0.02), 1.0))
+    rt = app_mod.Runtime(StubBase(), scene, machine=object(), tracker=tracker)
+    assert "t" in rt.base.accepted
+    rt._follow_eye()
+    assert scene.views[-1] == (0.1, -0.5, 0.02)
+
+
+def test_portal_runtime_says_why_tracking_is_off_once():
+    scene = PortalScene()
+    rt = app_mod.Runtime(StubBase(), scene, machine=object(),
+                         tracker=StubTracker(error="head tracking off: no camera"))
+    rt._follow_eye()
+    rt._follow_eye()
+    assert scene.notices == ["head tracking off: no camera"]
+    assert scene.views[-1] == scene.portal.nominal_eye
+
+
+def test_pausing_tracking_recentres_and_says_so():
+    scene = PortalScene()
+    tracker = StubTracker(((0.1, -0.5, 0.02), 1.0))
+    rt = app_mod.Runtime(StubBase(), scene, machine=object(), tracker=tracker)
+    rt._follow_eye()
+    rt._toggle_tracking()
+    assert scene.notices[-1] == "head tracking paused (T)"
+    rt._toggle_tracking()
+    assert scene.notices[-1] == ""
+
+
+def test_overlay_runtime_has_no_tracking_key():
+    rt = _runtime()
+    assert "t" not in rt.base.accepted
+
+
+def test_portal_requested_reads_the_env():
+    assert app_mod.portal_requested({"MAVIS_PORTAL": "1"})
+    assert not app_mod.portal_requested({"MAVIS_PORTAL": "0"})
+    assert not app_mod.portal_requested({})

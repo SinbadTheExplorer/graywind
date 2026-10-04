@@ -11,6 +11,10 @@ intermittently rather than loudly.
 Run from `mavis/`:  .venv/bin/python -m avatar.app
 Press W to wake him without the wake word (the trained model may not exist
 yet); Escape quits.
+
+MAVIS_PORTAL=1 stands him behind the glass instead (see `avatar.portal`):
+full screen, a room behind him, and the view redrawn from wherever the
+webcam sees your eyes. T pauses the tracking, to compare with and without.
 """
 import asyncio
 import os
@@ -24,7 +28,8 @@ import time
 import numpy as np
 from scipy.io import wavfile
 
-from avatar import brain, capture, dismiss, lipsync, states, stt, voice_client
+from avatar import (brain, capture, dismiss, lipsync, portal, states, stt,
+                    voice_client)
 
 # Idle prompts he gives into silence before he gives up and goes dark.
 SILENCE_PROMPTS = 2
@@ -60,12 +65,21 @@ def has_speech(samples: np.ndarray) -> bool:
 
 
 class Runtime:
-    def __init__(self, base, scene, machine, voice=None, listener=None):
+    def __init__(self, base, scene, machine, voice=None, listener=None,
+                 tracker=None):
         self.base = base
         self.scene = scene
         self.machine = machine
         self.voice = voice
         self.listener = listener
+        # Portal mode only: the webcam head tracker and the smoothing between
+        # it and the lens. Both None in the overlay, and _tick skips them.
+        self.tracker = tracker
+        self._smoother = (portal.EyeSmoother(scene.portal)
+                          if getattr(scene, "portal", None) is not None else None)
+        self._eye_stamp = None
+        self._tracking = True
+        self._tracker_error_shown = False
         self._inbox = queue.Queue()
         self._manual_wake = threading.Event()
         self._stopping = threading.Event()
@@ -74,6 +88,8 @@ class Runtime:
         base.taskMgr.add(self._tick, "mavis-runtime")
         base.accept("w", self._manual_wake.set)
         base.accept("escape", base.userExit)
+        if self._smoother is not None:
+            base.accept("t", self._toggle_tracking)
 
     # -- render thread ------------------------------------------------------
 
@@ -88,6 +104,8 @@ class Runtime:
         # clips returns immediately and Panda3D advances the animation itself.
         # Nothing else calls this, so leaving it out froze such a model solid.
         self.scene.idle(task.time)
+        if self._smoother is not None:
+            self._follow_eye()
         mouth = self._mouth
         if mouth is not None:
             env, start = mouth
@@ -97,6 +115,33 @@ class Runtime:
             self.scene.set_mouth(0.0)
             self._mouth_open = False
         return task.cont
+
+    def _follow_eye(self) -> None:
+        """Feed the newest webcam reading through the smoother into the lens.
+
+        A reading is fed once, at its own capture time. Between readings the
+        smoother is asked with None at the current time, which it treats as
+        "nothing new" for HOLD seconds and only then as "face gone" -- so the
+        render rate and the camera rate never need to agree.
+        """
+        now = time.monotonic()
+        eye, stamp = (None, None)
+        if self.tracker is not None and self._tracking:
+            eye, stamp = self.tracker.latest()
+            error = getattr(self.tracker, "error", None)
+            if error and not self._tracker_error_shown:
+                self._tracker_error_shown = True
+                self.scene.show_notice(error)
+        if stamp is not None and stamp != self._eye_stamp:
+            self._eye_stamp = stamp
+            view = self._smoother.update(eye, stamp)
+        else:
+            view = self._smoother.update(None, now)
+        self.scene.look_from(view)
+
+    def _toggle_tracking(self) -> None:
+        self._tracking = not self._tracking
+        self.scene.show_notice("" if self._tracking else "head tracking paused (T)")
 
     def on_render(self, fn):
         """Run `fn` on the render thread; block this worker for its result."""
@@ -308,15 +353,28 @@ def main() -> int:
     from panda3d.core import Vec4, WindowProperties
     from avatar import canned, scene as scene_mod, wake
 
+    from avatar import headtrack
+
+    screen = portal.screen_from_env() if portal_requested() else None
     base = ShowBase()
-    # A desktop presence, not an application window: no title bar, no frame,
-    # and the desktop showing through behind him. Escape is the only way out,
-    # because an undecorated window has no close button.
     chrome = WindowProperties()
-    chrome.set_undecorated(True)
-    base.win.request_properties(chrome)
-    base.win.set_clear_color(Vec4(0.0, 0.0, 0.0, 0.0))
-    scene = scene_mod.AvatarScene(base)
+    if screen is None:
+        # A desktop presence, not an application window: no title bar, no
+        # frame, and the desktop showing through behind him. Escape is the
+        # only way out, because an undecorated window has no close button.
+        chrome.set_undecorated(True)
+        base.win.request_properties(chrome)
+        base.win.set_clear_color(Vec4(0.0, 0.0, 0.0, 0.0))
+    else:
+        # Behind the glass the window IS the glass: it has to cover exactly
+        # the physical screen MAVIS_SCREEN_CM describes, or the frustum is
+        # drawn for a window that is not there and the room shears.
+        chrome.set_fullscreen(True)
+        chrome.set_size(base.pipe.get_display_width(),
+                        base.pipe.get_display_height())
+        base.win.request_properties(chrome)
+        base.win.set_clear_color(Vec4(0.0, 0.0, 0.0, 1.0))
+    scene = scene_mod.AvatarScene(base, portal=screen)
     voice = voice_client.VoiceClient()
     machine = states.AvatarApp(scene=scene, canned=canned.CannedVoice())
 
@@ -326,14 +384,32 @@ def main() -> int:
         listener = None
         print(f"{exc}\nPress W in the window to wake him.", file=sys.stderr)
 
-    runtime = Runtime(base, scene, machine, voice=voice, listener=listener)
+    tracker = None
+    if screen is not None:
+        # Opened HERE, on the main thread, before base.run(): see headtrack.
+        capture_dev, error = headtrack.open_camera()
+        tracker = headtrack.HeadTracker(capture_dev, screen)
+        tracker.error = error
+        tracker.start()
+        if tracker.error:
+            print(tracker.error, file=sys.stderr)
+
+    runtime = Runtime(base, scene, machine, voice=voice, listener=listener,
+                      tracker=tracker)
     runtime.start()
     try:
         base.run()
     finally:
         runtime.stop()
         voice.stop()
+        if tracker is not None:
+            tracker.stop()
     return 0
+
+
+def portal_requested(environ=None) -> bool:
+    env = os.environ if environ is None else environ
+    return env.get("MAVIS_PORTAL", "") not in ("", "0", "false")
 
 
 if __name__ == "__main__":

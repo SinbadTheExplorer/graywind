@@ -34,7 +34,8 @@ CAPTION_TOP = -0.42
 # Last row may not reach the credit band below it.
 CAPTION_FLOOR = -0.88
 
-from avatar import props
+from avatar import portal as portal_mod
+from avatar import props, stage
 
 ASSET_DIR = Path(__file__).resolve().parent.parent / "assets" / "avatar"
 
@@ -153,6 +154,10 @@ FRAMING = 3.05
 # on the torso instead. 0.5 would put the head's centre at the very top edge.
 HEAD_RISE = 0.31
 DEFAULT_FOV = 30.0
+# Portal mode: how far behind the glass his head sits, metres. Deep enough
+# that leaning visibly uncovers the side walls, shallow enough that the head
+# still fills the window from a normal sitting distance.
+PORTAL_DEPTH = 0.30
 
 
 def choose_avatar() -> str:
@@ -315,10 +320,16 @@ class _IdleMotion:
 class AvatarScene:
     """Owns the avatar's visual state. Knows nothing about audio."""
 
-    def __init__(self, show_base, avatar: str = None):
+    def __init__(self, show_base, avatar: str = None, portal=None):
+        """`portal` is a `portal.Screen` to stand him behind the glass, or None
+        for the original transparent desktop overlay -- which is unchanged."""
         self.base = show_base
         self.name = avatar or choose_avatar()
         self.config = AVATARS[self.name]
+        self.portal = portal
+        self.room = None
+        self.pivot = None
+        self.gaze = 0.0
 
         self._init_shader()
         self.actor = load_actor(show_base.loader, self.name)
@@ -358,7 +369,10 @@ class AvatarScene:
         self.prop = self._attach_prop()
 
         self._release_camera()
-        self._frame_head()
+        if portal is None:
+            self._frame_head()
+        else:
+            self._place_in_portal()
 
         if self.animated:
             # No set_control_effect here on purpose: loop() already leaves the
@@ -368,7 +382,12 @@ class AvatarScene:
             # _begin_fade's job.
             self.actor.loop(self.config["idle_anim"])
             self._looping = self.config["idle_anim"]
-        self._light()
+        if portal is None:
+            self._light()
+        else:
+            self.lights = stage.light_room(self.base.render, self.pivot,
+                                           portal, self.room_depth)
+            self.look_from(portal.nominal_eye)
         # mayChange=True keeps a live TextNode. The default flattens the text
         # into a bare PandaNode, after which the credit can no longer be read
         # back off the node -- and this credit is an attribution condition, so
@@ -417,7 +436,10 @@ class AvatarScene:
 
         import simplepbr
 
-        self.pipeline = simplepbr.init(msaa_samples=0)
+        # Shadows only behind the glass: the overlay has nothing to cast onto,
+        # and the shadow pass is a second render of the whole model.
+        self.pipeline = simplepbr.init(msaa_samples=0,
+                                       enable_shadows=self.portal is not None)
         self.base._mavis_pbr_pipeline = self.pipeline
 
     def _release_camera(self):
@@ -437,19 +459,14 @@ class AvatarScene:
             return
         self.base.disableMouse()
 
-    def _frame_head(self):
-        """Place the actor so the head fills the frame, from measured bounds.
+    def _measure_head(self):
+        """(center_x, center_y, center_z, head_height) in the actor's own space.
 
         Bounds are read *relative to the actor*. `get_tight_bounds()` with no
         argument reports the mesh's own untransformed space, which on a model
         carrying a scale above the meshes -- as the rescaled keanu export does
         -- is out by the scale factor and frames empty air.
-
-        The near plane is pulled in to suit the computed distance. Panda3D
-        defaults it to 1.0, and a head framed closer than that is entirely
-        clipped away, which looks exactly like a model that failed to load.
         """
-        self.actor.set_pos(0, 0, 0)
         head = self.actor.find(f"**/{self.config['head_mesh']}")
 
         if head.is_empty():
@@ -464,6 +481,18 @@ class AvatarScene:
         # the head on the model's centreline, so framing only Z looked correct
         # until a clip shifted his weight and left him sitting off to one side.
         center_x = (low[0] + high[0]) / 2.0
+        center_y = (low[1] + high[1]) / 2.0
+        return center_x, center_y, center_z, head_height
+
+    def _frame_head(self):
+        """Place the actor so the head fills the frame, from measured bounds.
+
+        The near plane is pulled in to suit the computed distance. Panda3D
+        defaults it to 1.0, and a head framed closer than that is entirely
+        clipped away, which looks exactly like a model that failed to load.
+        """
+        self.actor.set_pos(0, 0, 0)
+        center_x, _center_y, center_z, head_height = self._measure_head()
 
         framed = head_height * FRAMING
         lens = self.base.camLens
@@ -474,6 +503,54 @@ class AvatarScene:
             lens.set_near(min(lens.get_near(), max(distance * 0.05, 0.01)))
         # +z lifts the actor, which lowers the camera's aim down his body.
         self.actor.set_pos(-center_x, distance, -center_z + framed * HEAD_RISE)
+
+    def _place_in_portal(self):
+        """Stand him PORTAL_DEPTH behind the glass, framed as the overlay is.
+
+        Scaled so that from the nominal eye he fills the window exactly as he
+        fills the overlay -- the same torso portrait -- and moving your head
+        then shows MORE of him and the room, never less. He hangs from a pivot
+        through his head, so turning toward the viewer turns the head in place
+        rather than swinging it round his feet.
+        """
+        screen = self.portal
+        self.actor.set_pos(0, 0, 0)
+        center_x, center_y, center_z, head_height = self._measure_head()
+
+        eye_distance = -screen.nominal_eye[1]
+        visible = screen.height * (eye_distance + PORTAL_DEPTH) / eye_distance
+        scale = visible / (head_height * FRAMING)
+
+        self.pivot = self.base.render.attach_new_node("mavis-pivot")
+        self.pivot.set_pos(0, PORTAL_DEPTH, visible * HEAD_RISE)
+        self.actor.reparent_to(self.pivot)
+        self.actor.set_scale(scale)
+        self.actor.set_pos(-center_x * scale, -center_y * scale, -center_z * scale)
+
+        low, high = self.actor.get_tight_bounds(self.base.render)
+        self.room_depth = max(high[1], PORTAL_DEPTH) + stage.BACK_GAP
+        # The room is what the window reveals at his depth (see stage), so
+        # he always fits inside it however he is framed.
+        reveal = (eye_distance + PORTAL_DEPTH) / eye_distance
+        # His feet, with a hair of clearance so the soles do not z-fight.
+        self.room = stage.build_room(
+            self.base.render, screen, width=screen.width * reveal,
+            top=max(screen.height / 2.0 * reveal, high[2] + 0.01),
+            depth=self.room_depth, floor_z=low[2] - 0.002)
+
+    def look_from(self, eye) -> None:
+        """Redraw the window as seen from `eye` (portal frame, metres).
+
+        Call every frame with the tracked eye. Also turns him a few degrees to
+        face it; `idle` applies the turn so it composes with his sway.
+        """
+        if self.portal is None:
+            return
+        self.gaze = portal_mod.gaze_heading(eye, PORTAL_DEPTH)
+        if self.base.camLens is None:
+            return
+        portal_mod.apply_off_axis(self.base.camera, self.base.camLens, eye,
+                                  self.portal)
 
     def _light(self):
         key = DirectionalLight("key")
@@ -503,8 +580,13 @@ class AvatarScene:
             self.actor.set_h(math.sin(elapsed * SWAY_RATE)
                              * self.config.get("sway", 12.0))
             self.motion.apply(elapsed)
-            return
-        self._advance_blend(elapsed)
+        else:
+            self._advance_blend(elapsed)
+        if self.pivot is not None:
+            # Eased, not set: the tracked eye already arrives smoothed, but a
+            # head that turns at camera rate still reads as mechanical.
+            current = self.pivot.get_h()
+            self.pivot.set_h(current + (self.gaze - current) * 0.08)
 
     def play(self, name: str, loop: bool = True) -> bool:
         """Switch to another clip, e.g. "smoking". False if it has none.
