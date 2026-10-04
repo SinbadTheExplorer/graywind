@@ -123,6 +123,7 @@ Let the inspector write `avatar.json` for you, then fix the credit by hand:
 | `model` | yes | file name inside the folder: `.glb`, `.gltf` or `.bam` |
 | `credit` | yes | shown on screen. For CC BY models the credit IS the licence condition |
 | `head_mesh` | no | mesh to frame on; without it the top `head_fraction` of the model is assumed to be the head |
+| `dormant` | no | `true` keeps the model on disk but out of the M rotation and never the default; `MAVIS_AVATAR=<name>` still loads it |
 | `head_fraction` | no | used only without `head_mesh`: 0.19 (default) for a full figure, ~0.5 for a bust, ~0.9 for a head alone |
 | `mouth` | no | `{"kind": "slider", "slider": "jawOpen"}` (a morph), `{"kind": "joint", "joint": "...", "axis": "p", "degrees": 14}` (a jaw bone), `{"kind": "nod", "degrees": 3}` (the whole model dips with his voice), or omit for no lip-sync |
 | `idle_anim` | no | clip to loop; without one he holds still and sways |
@@ -165,7 +166,7 @@ is for.
 Local-only drop-ins in use (2026-10-04), not committed:
 - `hulkbuster` -- "Hulkbuster's helmet MCU version" by el_robotto, CC BY 4.0,
   https://sketchfab.com/3d-models/hulkbusters-helmet-mcu-version-63e0d0c4b342413eaeb9528fdd851311
-  -- Marvel design, so local only. Static; nods. Centred close-up
+  -- Marvel design, so local only. DORMANT (owner's call, 2026-10-04). Static; nods. Centred close-up
   (`portal_framing` 1.7, `portal_rise` 0.02).
 - `zbrush-mech` -- from a Sketchfab source zip named
   "zbrush-for-concept-mech-design-dver"; author and licence NOT yet

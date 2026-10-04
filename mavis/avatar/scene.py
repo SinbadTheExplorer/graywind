@@ -169,7 +169,7 @@ EXTRA_DIR = ASSET_DIR / "extra"
 # required; see assets/avatar/ATTRIBUTION.md, "Adding your own models".
 _EXTRA_KEYS = {"model", "credit", "head_mesh", "head_fraction", "mouth",
                "idle_anim", "anims", "idle_variety", "poses", "sway",
-               "portal_framing", "portal_rise"}
+               "portal_framing", "portal_rise", "dormant"}
 
 
 def _read_extra(folder: Path):
@@ -232,7 +232,10 @@ def available_avatars(registry: dict = None) -> list:
     registry = all_avatars() if registry is None else registry
     ordered = [n for n in PREFERENCE if n in registry]
     ordered += sorted(n for n in registry if n not in PREFERENCE)
-    return [n for n in ordered if model_path(registry[n]).exists()]
+    # Dormant models stay on disk and stay loadable by name (MAVIS_AVATAR),
+    # but are never the default and never come up on M.
+    return [n for n in ordered if model_path(registry[n]).exists()
+            and not registry[n].get("dormant")]
 
 
 def choose_avatar(registry: dict = None) -> str:
@@ -608,10 +611,11 @@ class AvatarScene:
         """The model after this one in the switching order, or None if this
         is the only one built."""
         built = available_avatars(self.registry)
+        if self.name not in built:
+            # Started on a dormant model (by name): M moves to an awake one.
+            return built[0] if built else None
         if len(built) < 2:
             return None
-        if self.name not in built:
-            return built[0]
         return built[(built.index(self.name) + 1) % len(built)]
 
     def swap(self, name: str) -> None:

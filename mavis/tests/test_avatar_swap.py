@@ -205,3 +205,17 @@ def test_floor_is_out_of_sight_even_under_a_short_model(base, static_registry):
     at_glass = floor_z * (-eye_y) / (sc.room_depth - eye_y)
     assert at_glass < -screen.height / 2
     sc._teardown()
+
+
+def test_a_dormant_model_is_skipped_by_m_but_loadable_by_name(base, registry):
+    reg = dict(registry, twin=dict(registry["twin"], dormant=True))
+    assert scene.available_avatars(reg) == ["mech-bust"]
+    sc = scene.AvatarScene(base, "twin", registry=reg)     # by name: still loads
+    assert sc.name == "twin"
+    assert sc.next_avatar() == "mech-bust"                # M wakes into the rotation
+    sc._teardown()
+
+
+def test_dormant_is_an_accepted_drop_in_key(tmp_path):
+    _drop_in(tmp_path, "sleeper", dormant=True)
+    assert scene.all_avatars(tmp_path)["sleeper"]["dormant"] is True
