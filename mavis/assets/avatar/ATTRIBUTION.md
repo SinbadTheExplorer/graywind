@@ -110,6 +110,33 @@ on the 8GB M2 this targets.
 
 ---
 
+## `mech-bust` — committed, CC BY 4.0 (modified)
+
+"Mech bust" by **Just8** — https://sketchfab.com/3d-models/mech-bust-f06084d487d94137bc4dd58e48696439
+— the model in the off-axis-projection reel that portal mode was built from.
+
+Licensed **CC Attribution 4.0** (stated in the file's own `asset.extras`).
+The on-screen credit `Model: "Mech bust" by Just8 (CC BY 4.0)` is the
+licence condition; do not remove it.
+
+**Changes from the original** (CC BY requires saying so). The download is a
+glTF-Transform–optimised GLB (meshopt geometry, quantized attributes, WebP
+textures) that panda3d-gltf cannot read. `mech_bust.glb` here was produced by:
+
+    npx -y @gltf-transform/cli@4 dequantize mech_bust_small.glb unpacked.glb
+    .venv/bin/python -m tools.fix_sketchfab_glb unpacked.glb fixed.glb
+    npx -y @gltf-transform/cli@4 prune fixed.glb mech_bust.glb
+
+i.e. geometry decompressed; WebP textures re-encoded as JPEG (PNG where alpha
+is used); four of its five skins, which share one skeleton and differ only by
+a uniform scale + offset, merged into the first with that offset baked into
+their vertices; bones and meshes regrouped under one `Armature` node; and
+Sketchfab's background-particle plane dropped. Appearance and animation are
+otherwise unchanged. 21.9 MB, 226k triangles, 54 bones, one clip (`anim`),
+jaw `jaw_07` (hinge axis `r`) drives the mouth.
+
+---
+
 ## Adding your own models (press M to cycle)
 
 Any rigged character can join the rotation. Make a folder under

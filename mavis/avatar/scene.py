@@ -176,7 +176,8 @@ EXTRA_DIR = ASSET_DIR / "extra"
 # What a drop-in model's avatar.json may say. Only `model` and `credit` are
 # required; see assets/avatar/ATTRIBUTION.md, "Adding your own models".
 _EXTRA_KEYS = {"model", "credit", "head_mesh", "head_fraction", "mouth",
-               "idle_anim", "anims", "idle_variety", "poses", "sway"}
+               "idle_anim", "anims", "idle_variety", "poses", "sway",
+               "portal_framing", "portal_rise"}
 
 
 def _read_extra(folder: Path):
@@ -666,6 +667,10 @@ class AvatarScene:
         self.pipeline = simplepbr.init(msaa_samples=4 if self.portal is not None else 0,
                                        enable_shadows=self.portal is not None)
         self.base._mavis_pbr_pipeline = self.pipeline
+        if self.portal is not None:
+            # Something for metal to reflect. Without it PBR metal reflects
+            # black: the mech rendered as a murky silhouette. See stage.
+            self.pipeline.env_map = stage.studio_env_map()
 
     def _release_camera(self):
         """Take the camera away from ShowBase's default mouse trackball.
@@ -751,10 +756,14 @@ class AvatarScene:
 
         eye_distance = -screen.nominal_eye[1]
         visible = screen.height * (eye_distance + PORTAL_DEPTH) / eye_distance
-        scale = visible / (head_height * PORTAL_FRAMING)
+        # Per model: a drop-in may frame tighter or looser than Johnny (the
+        # reel's mech is a close-up of the head, he is head and shoulders).
+        scale = visible / (head_height
+                           * float(self.config.get("portal_framing", PORTAL_FRAMING)))
 
         self.pivot = self.base.render.attach_new_node("mavis-pivot")
-        self.pivot.set_pos(0, PORTAL_DEPTH, visible * PORTAL_RISE)
+        self.pivot.set_pos(0, PORTAL_DEPTH,
+                           visible * float(self.config.get("portal_rise", PORTAL_RISE)))
         self.actor.reparent_to(self.pivot)
         self.actor.set_scale(scale)
         self.actor.set_pos(-center_x * scale, -center_y * scale, -center_z * scale)

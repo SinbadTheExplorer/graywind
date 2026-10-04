@@ -1,0 +1,14 @@
+{
+  "model": "mech_bust.glb",
+  "credit": "Model: \"Mech bust\" by Just8 (CC BY 4.0)",
+  "head_mesh": "mech_mech_head_mat_0",
+  "mouth": {
+    "kind": "joint",
+    "joint": "jaw_07",
+    "axis": "r",
+    "degrees": 18.0
+  },
+  "idle_anim": "anim",
+  "portal_framing": 1.6,
+  "portal_rise": 0.12
+}

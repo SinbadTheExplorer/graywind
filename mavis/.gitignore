@@ -10,6 +10,14 @@ __pycache__/
 assets/avatar/*
 !assets/avatar/ATTRIBUTION.md
 !assets/avatar/jonny.glb
+# Drop-ins live under extra/ and stay ignored, except a CC BY one recorded in
+# ATTRIBUTION.md. (Re-including a file needs its parent directories back too.)
+!assets/avatar/extra/
+assets/avatar/extra/*
+!assets/avatar/extra/mech-bust/
+assets/avatar/extra/mech-bust/*
+!assets/avatar/extra/mech-bust/mech_bust.glb
+!assets/avatar/extra/mech-bust/avatar.json
 # Generated Johnny speech: cloned audio in a hired voice actor's voice, and
 # this repo is public. The generator and the line text are committed; the wavs
 # are rebuilt with `scripts/pregen_lines.py`.

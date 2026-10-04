@@ -58,9 +58,18 @@ def inspect(path: str) -> dict:
     elif morph:
         mouth = {"kind": "slider", "slider": morph, "gain": 1.0}
     elif jaw:
-        # Axis and travel differ per rig: render with tools/render_pose.py
-        # and adjust until the mouth opens rather than skews.
-        mouth = {"kind": "joint", "joint": jaw, "axis": "p", "degrees": 14.0}
+        # A mouth opens by turning the jaw about the head's LEFT-RIGHT axis
+        # (world x, for a model facing the camera). Pick whichever of the
+        # joint's local axes lines up with it; the other two skew the jaw
+        # sideways. Guessing "p" for the mech bust skewed it -- its hinge is r.
+        hinge = actor.expose_joint(None, "modelRoot", jaw)
+        actor.update(force=True)
+        local = {"h": (0, 0, 1), "p": (1, 0, 0), "r": (0, 1, 0)}
+        axis = max(local, key=lambda a: abs(
+            actor.get_relative_vector(hinge, local[a]).normalized()[0]))
+        print(f"jaw     {jaw}: hinge axis {axis} (if it closes instead of "
+              "opening, make degrees negative)")
+        mouth = {"kind": "joint", "joint": jaw, "axis": axis, "degrees": 14.0}
     else:
         mouth = {"kind": "none"}
     idle = next((a for a in anims if "idle" in a.lower()), anims[0] if anims else None)

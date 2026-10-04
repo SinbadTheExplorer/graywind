@@ -39,7 +39,7 @@ BACK_GAP = 0.20
 TILE = 0.75
 # Concrete: dark blue-grey, the reel's wall. Values are albedo, before light.
 CONCRETE_RGB = (0.065, 0.08, 0.12)
-RIM_RGB = (1.6, 0.10, 0.07)          # the reel's red
+RIM_RGB = (0.85, 0.06, 0.05)         # the reel's red, kept to an accent
 COOL_RIM_RGB = (0.25, 0.35, 0.6)
 
 
@@ -177,6 +177,54 @@ def light_room(render, target: NodePath, screen, depth: float):
     render.set_light(fill_np)
     lights.append(fill_np)
     return lights
+
+
+def studio_env_map(size: int = 64):
+    """A virtual photo studio for METAL to reflect: dark, one overhead softbox.
+
+    PBR metal has almost no diffuse colour -- it shows what it reflects. With
+    no environment it reflects black, and the mech (the reel's model) came out
+    a murky silhouette. The reel's metal reads as metal because of bright top
+    highlights; a softbox overhead gives exactly that, and a faint panel on
+    the viewer's side keeps faces from going pitch black. Generated, not
+    shipped: no HDR file to license or carry.
+
+    simplepbr samples this with the WORLD reflection vector, so faces are
+    world axes: 0 +x, 1 -x, 2 +y (into the screen), 3 -y (toward the viewer),
+    4 +z (up), 5 -z (down).
+    """
+    import simplepbr
+
+    def face(fill, box=None, box_rgb=(0, 0, 0), soft=0.25):
+        img = PNMImage(size, size, 3)
+        img.fill(*fill)
+        if box:
+            x0, y0, x1, y1 = (int(v * size) for v in box)
+            for x in range(size):
+                for y in range(size):
+                    # Distance outside the box, in face widths: a soft edge,
+                    # so highlights are smooth gradients, not hard stripes.
+                    dx = max(x0 - x, 0, x - x1) / size
+                    dy = max(y0 - y, 0, y - y1) / size
+                    k = max(0.0, 1.0 - (dx * dx + dy * dy) ** 0.5 / soft)
+                    if k > 0:
+                        img.set_xel(x, y, *(f + (b - f) * k for f, b in zip(fill, box_rgb)))
+        return img
+
+    dark = (0.012, 0.014, 0.022)
+    faces = [
+        face(dark),                                            # +x
+        face(dark),                                            # -x
+        face((0.03, 0.01, 0.01)),                              # +y behind him: a red hint
+        face(dark, (0.25, 0.3, 0.75, 0.7), (0.22, 0.24, 0.30)),  # -y viewer side: dim fill panel
+        face(dark, (0.2, 0.2, 0.8, 0.8), (1.0, 0.98, 0.95)),   # +z overhead softbox
+        face((0.005, 0.005, 0.008)),                           # -z floor
+    ]
+    cube = Texture("mavis-studio")
+    cube.setup_cube_map(size, Texture.T_unsigned_byte, Texture.F_rgb)
+    for i, img in enumerate(faces):
+        cube.load(img, i, 0)
+    return simplepbr.EnvMap(cube, blocking_prepare=True)
 
 
 class FilmFinish:
