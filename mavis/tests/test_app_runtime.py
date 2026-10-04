@@ -13,8 +13,14 @@ from avatar import app as app_mod
 
 
 class StubTaskMgr:
+    def __init__(self):
+        self.later = []
+
     def add(self, *a, **k):
         pass
+
+    def doMethodLater(self, delay, fn, name, extraArgs=()):
+        self.later.append((fn, list(extraArgs)))
 
 
 class StubBase:
@@ -163,3 +169,53 @@ def test_hud_reports_what_the_tracker_sees():
     assert "SEARCHING" in rt.hud_text(None, (0, -0.6, 0))
     rt._tracking = False
     assert "PAUSED" in rt.hud_text(None, (0, -0.6, 0))
+
+
+class SwapScene(PortalScene):
+    def __init__(self, upcoming, fail=False):
+        super().__init__()
+        self.upcoming = upcoming
+        self.fail = fail
+        self.swapped = []
+        self._t = 0.0
+        self.flash = None
+
+    def next_avatar(self):
+        return self.upcoming
+
+    def swap(self, name):
+        if self.fail:
+            raise RuntimeError("bad model")
+        self.swapped.append(name)
+
+
+def test_m_switches_on_a_later_frame_not_in_the_handler():
+    scene = SwapScene("keanu")
+    rt = app_mod.Runtime(StubBase(), scene, machine=object())
+    assert "m" in rt.base.accepted
+    rt._next_model()
+    assert scene.swapped == [] and scene.notices[-1] == "// switching to keanu"
+    rt._next_model()                        # mashing M queues nothing extra
+    assert len(rt.base.taskMgr.later) == 1
+    fn, args = rt.base.taskMgr.later[0]
+    fn(*args)
+    assert scene.swapped == ["keanu"] and scene.notices[-1] == ""
+    assert not rt._swapping
+
+
+def test_m_with_one_model_says_how_to_add_more():
+    scene = SwapScene(None)
+    rt = app_mod.Runtime(StubBase(), scene, machine=object())
+    rt._next_model()
+    assert "assets/avatar/extra" in scene.notices[-1]
+    assert rt.base.taskMgr.later == []
+
+
+def test_a_failed_switch_is_reported_and_unlocks():
+    scene = SwapScene("junk", fail=True)
+    rt = app_mod.Runtime(StubBase(), scene, machine=object())
+    rt._next_model()
+    fn, args = rt.base.taskMgr.later[0]
+    fn(*args)
+    assert scene.notices[-1].startswith("couldn't load junk")
+    assert not rt._swapping

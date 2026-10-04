@@ -29,7 +29,7 @@ echo 'MAVIS_SCREEN_CM=30.2x19.6' >> ~/.mavis/env         # MEASURE YOURS, see be
 .venv/bin/python -m avatar.app                           # or relaunch Johnny.app
 ```
 
-- **T** pauses/resumes tracking (A/B the effect). **W** wakes him. **Esc** quits.
+- **T** pauses/resumes tracking (A/B the effect). **M** switches model. **W** wakes him. **Esc** quits.
 - **Measure the lit screen area with a ruler** (width x height, cm). The effect
   is only as correct as these two numbers. On a notched MacBook in full
   screen, measure the area *below* the notch.
@@ -123,6 +123,28 @@ high-end hard-surface model with metal PBR materials; `jonny` (the only model
 in the cloud box) is a Ready Player Me export in a T-pose. The owner's local
 `keanu` model is much closer — every look decision above should be re-judged
 on it, on the Mac.
+
+## Model switching (third commit) — press M
+
+- **M** cycles through every model on disk: built-ins (`keanu`, `jonny`), then
+  drop-ins from `mavis/assets/avatar/extra/<name>/` (model + `avatar.json`,
+  gitignored; format and licence notes in `assets/avatar/ATTRIBUTION.md`).
+- `tools/inspect_model.py <model>` prints a starter `avatar.json` (head mesh,
+  mouth morph/jaw, idle clip). Checked against `jonny`: it reproduces the
+  hand-written config exactly.
+- `AvatarScene` is now split: `__init__` = once per window (shader, camera,
+  film, credit node); `_build(name)` = per model; `_teardown()`; `swap(name)`
+  restores the previous model and re-raises if the new one fails to load.
+- The runtime defers the swap one frame (`doMethodLater(0.05)`) so the cut to
+  black and "// switching to X" are drawn before the load blocks the render
+  thread. Repeated M presses during a pending swap are ignored.
+- Tests: `tests/test_avatar_swap.py` + 3 runtime tests, 234 passing. Mutation
+  checked: uncleared lights, leftover room, no restore on failure, an asleep
+  model shown, a stale credit — each fails a test.
+- Rendered a portal swap sequence (jonny → copy → jonny): one room, four
+  lights after two swaps.
+- **Caveat:** Panda3D's ModelPool keeps every loaded model in RAM. On the 8GB
+  M2, cycling through many large models adds up.
 
 ## UNVERIFIED (needs the owner, on the Mac)
 

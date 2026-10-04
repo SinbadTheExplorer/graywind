@@ -12,6 +12,9 @@ Run from `mavis/`:  .venv/bin/python -m avatar.app
 Press W to wake him without the wake word (the trained model may not exist
 yet); Escape quits.
 
+M switches to the next model on disk (built-ins, then any drop-ins under
+assets/avatar/extra/ -- see assets/avatar/ATTRIBUTION.md).
+
 MAVIS_PORTAL=1 stands him behind the glass instead (see `avatar.portal`):
 full screen, a room behind him, and the view redrawn from wherever the
 webcam sees your eyes. T pauses the tracking, to compare with and without.
@@ -81,6 +84,7 @@ class Runtime:
         self._tracking = True
         self._tracker_error_shown = False
         self._hud_at = 0.0
+        self._swapping = False
         self._inbox = queue.Queue()
         self._manual_wake = threading.Event()
         self._stopping = threading.Event()
@@ -89,6 +93,7 @@ class Runtime:
         base.taskMgr.add(self._tick, "mavis-runtime")
         base.accept("w", self._manual_wake.set)
         base.accept("escape", base.userExit)
+        base.accept("m", self._next_model)
         if self._smoother is not None:
             base.accept("t", self._toggle_tracking)
 
@@ -156,6 +161,40 @@ class Runtime:
         fps = getattr(self.tracker, "fps", 0.0) if self.tracker else 0.0
         return (f"JOHNNY // {state}   eye {-view[1]:.2f}m   "
                 f"x{view[0]:+.2f} z{view[2]:+.2f}   cam {fps:.0f}fps")
+
+    def _next_model(self) -> None:
+        """M: cut to black, say who is coming, swap on a LATER frame.
+
+        Loading a model blocks the render thread (keanu is 93MB). Swapping in
+        this handler would freeze the old model on screen for that long with
+        no sign anything was happening; deferring lets the cut and the notice
+        draw first, so the wait reads as part of the transition.
+        """
+        if self._swapping:
+            return
+        name = self.scene.next_avatar()
+        if name is None:
+            self.scene.show_notice(
+                "only one model built -- drop more into assets/avatar/extra/")
+            return
+        self._swapping = True
+        self.scene.show_notice(f"// switching to {name}")
+        flash = getattr(self.scene, "flash", None)
+        if flash is not None:
+            flash.fire(getattr(self.scene, "_t", 0.0))
+        self.base.taskMgr.doMethodLater(0.05, self._finish_swap, "mavis-swap",
+                                        extraArgs=[name])
+
+    def _finish_swap(self, name: str):
+        try:
+            self.scene.swap(name)
+            self.scene.show_notice("")
+        except Exception as exc:
+            # swap() has already put the previous model back.
+            self.scene.show_notice(f"couldn't load {name}: {exc}")
+        finally:
+            self._swapping = False
+            self._mouth_open = True     # re-close the NEW model's mouth next tick
 
     def _toggle_tracking(self) -> None:
         self._tracking = not self._tracking

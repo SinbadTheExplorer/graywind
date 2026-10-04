@@ -1,7 +1,9 @@
 # Avatar model attribution
 
-Two models are supported. `avatar/scene.py` picks `keanu` when it has been
-built and falls back to `jonny`; `MAVIS_AVATAR=jonny|keanu` overrides.
+Two models are built in. `avatar/scene.py` picks `keanu` when it has been
+built and falls back to `jonny`; `MAVIS_AVATAR=<name>` overrides. More can be
+dropped in without code changes -- see "Adding your own models" at the end.
+Press **M** while he runs to cycle through every model on disk.
 
 **This directory is gitignored except for `ATTRIBUTION.md` and `jonny.glb`.**
 The repo is public, so committing a model publishes it. Only add an unignore
@@ -105,3 +107,50 @@ is junk so the exporter would name the nodes unusably, the model is ~73 units
 tall, and the source textures are ~357MB of uncompressed 2048px TGAs. The
 result is ~80MB; skipping the texture caps gives ~344MB instead, which matters
 on the 8GB M2 this targets.
+
+---
+
+## Adding your own models (press M to cycle)
+
+Any rigged character can join the rotation. Make a folder under
+`assets/avatar/extra/` named for the model, put the model and an
+`avatar.json` in it, and restart Johnny:
+
+    assets/avatar/extra/robot/robot.glb
+    assets/avatar/extra/robot/avatar.json
+
+**Everything under `extra/` is gitignored** (it sits inside the ignored
+`assets/avatar/*`), so a model you are allowed to *use* but not to
+*redistribute* never reaches this public repo. Keep it that way.
+
+Let the inspector write `avatar.json` for you, then fix the credit by hand:
+
+    .venv/bin/python -m tools.inspect_model assets/avatar/extra/robot/robot.glb
+
+| key | required | meaning |
+|---|---|---|
+| `model` | yes | file name inside the folder: `.glb`, `.gltf` or `.bam` |
+| `credit` | yes | shown on screen. For CC BY models the credit IS the licence condition |
+| `head_mesh` | no | mesh to frame on; without it the top 19% of the model is assumed to be the head |
+| `mouth` | no | `{"kind": "slider", "slider": "jawOpen"}` (a morph), `{"kind": "joint", "joint": "...", "axis": "p", "degrees": 14}` (a jaw bone), or omit for no lip-sync |
+| `idle_anim` | no | clip to loop; without one he holds still and sways |
+| `anims`, `idle_variety`, `poses`, `sway` | no | as in the built-in `keanu` entry in `avatar/scene.py` |
+
+A folder with a broken or incomplete `avatar.json` is skipped with a printed
+reason; it never stops Johnny from starting. A model that fails to *load*
+when you press M puts the previous one back and says why on screen.
+
+Where to find models, and what each licence lets you do:
+
+- **Sketchfab** -- filter by *Downloadable* and an animated/rigged tag; download
+  the glTF. CC BY needs the credit line; CC BY-NC is fine for this personal use.
+- **Mixamo** (free Adobe account) -- characters and clips, royalty-free to use
+  but not to redistribute as raw files. FBX only: convert with Blender as in
+  "Rebuilding keanu.bam" above (`tools/fbx_to_glb.py`).
+- **VRoid Hub** -- VRM avatars (a glTF variant); each author sets their own
+  terms on the model's page. Not yet tried here -- `panda3d-gltf` may need the
+  `.vrm` renamed to `.glb`, and may ignore VRM-specific extensions.
+
+Model size matters on the 8GB M2: Panda3D keeps every model it has loaded
+cached in memory, so cycling through several 80MB models adds up.
+

@@ -21,6 +21,7 @@ Whichever mechanism is used, the mouth only moves if the character's
 a controlled joint updates the vertices on its own -- both look like a silent
 no-op without it, and both wasted a debugging session that way.
 """
+import json
 import math
 import os
 import random
@@ -28,7 +29,8 @@ from pathlib import Path
 
 from direct.actor.Actor import Actor
 from direct.gui.OnscreenText import OnscreenText
-from panda3d.core import AmbientLight, DirectionalLight, TextNode, Vec4
+from panda3d.core import (AmbientLight, CardMaker, DirectionalLight, TextNode,
+                          TransparencyAttrib, Vec4)
 
 CAPTION_TOP = -0.42
 # Last row may not reach the credit band below it.
@@ -170,23 +172,93 @@ PORTAL_FRAMING = 2.1
 PORTAL_RISE = 0.21
 
 
-def choose_avatar() -> str:
+EXTRA_DIR = ASSET_DIR / "extra"
+# What a drop-in model's avatar.json may say. Only `model` and `credit` are
+# required; see assets/avatar/ATTRIBUTION.md, "Adding your own models".
+_EXTRA_KEYS = {"model", "credit", "head_mesh", "mouth", "idle_anim", "anims",
+               "idle_variety", "poses", "sway"}
+
+
+def _read_extra(folder: Path):
+    """Config for one drop-in model folder, or None (with a reason printed).
+
+    A bad folder must not take the avatar down -- it is skipped and named, so
+    one half-copied download cannot cost you Johnny.
+    """
+    spec_path = folder / "avatar.json"
+    try:
+        spec = json.loads(spec_path.read_text())
+    except (OSError, ValueError) as exc:
+        print(f"skipping model {folder.name}: unreadable avatar.json ({exc})")
+        return None
+    unknown = set(spec) - _EXTRA_KEYS
+    missing = {"model", "credit"} - set(spec)
+    if missing or unknown:
+        print(f"skipping model {folder.name}: missing {sorted(missing)}, "
+              f"unknown {sorted(unknown)}")
+        return None
+    path = folder / spec["model"]
+    if not path.exists():
+        print(f"skipping model {folder.name}: no {path.name}")
+        return None
+    config = {k: v for k, v in spec.items() if k != "model"}
+    config["path"] = str(path)
+    # A model with no mouth config still talks -- it just doesn't move its
+    # mouth. Better than refusing a model that has no morphs or jaw.
+    config.setdefault("mouth", {"kind": "none"})
+    config["sway"] = float(config.get("sway", 3.0))
+    if "anims" in config:
+        config["anims"] = tuple(config["anims"])
+    if "idle_variety" in config:
+        config["idle_variety"] = tuple(config["idle_variety"])
+    return config
+
+
+def all_avatars(extra_dir: Path = None) -> dict:
+    """Built-in AVATARS plus every valid folder under assets/avatar/extra/."""
+    found = dict(AVATARS)
+    folder = EXTRA_DIR if extra_dir is None else Path(extra_dir)
+    if folder.is_dir():
+        for sub in sorted(p for p in folder.iterdir() if p.is_dir()):
+            if sub.name in found:
+                print(f"skipping model {sub.name}: name taken by a built-in")
+                continue
+            config = _read_extra(sub)
+            if config is not None:
+                found[sub.name] = config
+    return found
+
+
+def model_path(config) -> Path:
+    return Path(config["path"]) if "path" in config else ASSET_DIR / config["bam"]
+
+
+def available_avatars(registry: dict = None) -> list:
+    """Names whose model file exists, in switching order: built-ins best
+    first, then drop-ins alphabetically."""
+    registry = all_avatars() if registry is None else registry
+    ordered = [n for n in PREFERENCE if n in registry]
+    ordered += sorted(n for n in registry if n not in PREFERENCE)
+    return [n for n in ordered if model_path(registry[n]).exists()]
+
+
+def choose_avatar(registry: dict = None) -> str:
     """Name of the avatar to load: env override, else the best one built."""
+    registry = all_avatars() if registry is None else registry
     requested = os.environ.get("MAVIS_AVATAR")
     if requested:
-        if requested not in AVATARS:
+        if requested not in registry:
             raise ValueError(
-                f"MAVIS_AVATAR={requested!r} is not one of {sorted(AVATARS)}"
+                f"MAVIS_AVATAR={requested!r} is not one of {sorted(registry)}"
             )
         return requested
-    for name in PREFERENCE:
-        if (ASSET_DIR / AVATARS[name]["bam"]).exists():
-            return name
-    return PREFERENCE[-1]
+    built = available_avatars(registry)
+    return built[0] if built else PREFERENCE[-1]
 
 
-def load_actor(loader, name: str) -> Actor:
-    path = ASSET_DIR / AVATARS[name]["bam"]
+def load_actor(loader, name: str, registry: dict = None) -> Actor:
+    registry = AVATARS if registry is None else registry
+    path = model_path(registry[name])
     if not path.exists():
         raise FileNotFoundError(
             f"avatar model {name!r} missing at {path} -- see "
@@ -251,7 +323,17 @@ class _JawMouth:
         self._bundle.forceUpdate()
 
 
-_DRIVERS = {"slider": _SliderMouth, "joint": _JawMouth}
+class _NoMouth:
+    """For a drop-in model with neither morphs nor a known jaw joint."""
+
+    def __init__(self, actor, bundle, config):
+        self.sliders = []
+
+    def set(self, amount: float) -> None:
+        pass
+
+
+_DRIVERS = {"slider": _SliderMouth, "joint": _JawMouth, "none": _NoMouth}
 
 SWAY_RATE = 0.4
 
@@ -327,24 +409,87 @@ class _IdleMotion:
         self._bundle.forceUpdate()
 
 
+class _Flash:
+    """A cut to black that fades out over a swap, portal mode only.
+
+    The swap itself is instant, so without it one model simply replaces
+    another between two frames -- it reads as a glitch, not a transition.
+    """
+
+    LENGTH = 0.45
+
+    def __init__(self, render2d):
+        cm = CardMaker("mavis-flash")
+        cm.set_frame(-1, 1, -1, 1)
+        self.card = render2d.attach_new_node(cm.generate())
+        self.card.set_bin("background", 20)    # over the film, under text
+        self.card.set_transparency(TransparencyAttrib.M_alpha)
+        self.card.set_depth_test(False)
+        self.card.set_depth_write(False)
+        self.card.set_color(0, 0, 0, 0)
+        self._started = None
+
+    def fire(self, now: float) -> None:
+        self._started = now
+        self.card.set_color(0, 0, 0, 1)
+
+    def step(self, now: float) -> None:
+        if self._started is None:
+            return
+        k = (now - self._started) / self.LENGTH
+        if k >= 1.0:
+            self._started = None
+            self.card.set_color(0, 0, 0, 0)
+            return
+        self.card.set_color(0, 0, 0, (1.0 - k) ** 2)
+
+
 class AvatarScene:
     """Owns the avatar's visual state. Knows nothing about audio."""
 
-    def __init__(self, show_base, avatar: str = None, portal=None):
+    def __init__(self, show_base, avatar: str = None, portal=None,
+                 registry: dict = None):
         """`portal` is a `portal.Screen` to stand him behind the glass, or None
-        for the original transparent desktop overlay -- which is unchanged."""
+        for the original transparent desktop overlay -- which is unchanged.
+        `registry` defaults to the built-ins plus assets/avatar/extra/."""
         self.base = show_base
-        self.name = avatar or choose_avatar()
-        self.config = AVATARS[self.name]
+        self.registry = all_avatars() if registry is None else registry
         self.portal = portal
         self.room = None
         self.pivot = None
+        self.lights = []
         self.film = None
+        self.flash = None
         self.gaze = 0.0
+        self.actor = None
+        self.visible = True
 
+        # Once per window: the shader pipeline, the camera, the overlay's
+        # lights, the film finish. Everything per-MODEL is in _build, so that
+        # swap() can tear one model down and stand the next one up.
         self._init_shader()
-        self.actor = load_actor(show_base.loader, self.name)
-        self.actor.reparent_to(show_base.render)
+        self._release_camera()
+        if portal is None:
+            self._light()
+        else:
+            self.film = stage.FilmFinish(self.base.render2d)
+            self.flash = _Flash(self.base.render2d)
+        # mayChange=True keeps a live TextNode. The default flattens the text
+        # into a bare PandaNode, after which the credit can no longer be read
+        # back off the node -- and this credit is an attribution condition, so
+        # it has to stay verifiable.
+        self.credit = OnscreenText(
+            text="", pos=(0.0, -0.95), scale=0.04,
+            fg=(0.8, 0.8, 0.85, 1.0), align=TextNode.ACenter, mayChange=True,
+        )
+        self._build(avatar or choose_avatar(self.registry))
+
+    def _build(self, name: str) -> None:
+        """Load model `name` and set up everything that depends on it."""
+        self.name = name
+        self.config = self.registry[name]
+        self.actor = load_actor(self.base.loader, name, self.registry)
+        self.actor.reparent_to(self.base.render)
 
         character = self.actor.find("**/+Character").node()
         self._character = character
@@ -379,8 +524,7 @@ class AvatarScene:
 
         self.prop = self._attach_prop()
 
-        self._release_camera()
-        if portal is None:
+        if self.portal is None:
             self._frame_head()
         else:
             self._place_in_portal()
@@ -393,23 +537,13 @@ class AvatarScene:
             # _begin_fade's job.
             self.actor.loop(self.config["idle_anim"])
             self._looping = self.config["idle_anim"]
-        if portal is None:
-            self._light()
-        else:
+        if self.portal is not None:
             self.lights = stage.light_room(self.base.render, self.pivot,
-                                           portal, self.room_depth)
-            self.film = stage.FilmFinish(self.base.render2d)
-            self.look_from(portal.nominal_eye)
-        # mayChange=True keeps a live TextNode. The default flattens the text
-        # into a bare PandaNode, after which the credit can no longer be read
-        # back off the node -- and this credit is an attribution condition, so
-        # it has to stay verifiable.
-        self.credit = OnscreenText(
-            text=self.config["credit"], pos=(0.0, -0.95), scale=0.04,
-            fg=(0.8, 0.8, 0.85, 1.0), align=TextNode.ACenter, mayChange=True,
-        )
-        self._t = 0.0
-        self._clip_start = 0.0
+                                           self.portal, self.room_depth)
+            self.look_from(self.portal.nominal_eye)
+        self.credit.setText(self.config["credit"])
+        self._t = getattr(self, "_t", 0.0)
+        self._clip_start = self._t
         self._pending = None        # (name, loop) deferred by MIN_DWELL
         self._fade = None           # (from, to, started, loop) while blending
         self._oneshot = None        # a non-looping clip holding the screen
@@ -422,7 +556,55 @@ class AvatarScene:
             # Actor is a Python class, not a C++ binding, so it gets none of
             # the snake_case aliasing the rest of Panda3D has.
             self.actor.setBlend(animBlend=True)
-        self.visible = True
+        if not self.visible:
+            self.actor.hide()
+
+    def _teardown(self) -> None:
+        """Remove the current model and everything built around it."""
+        for light in self.lights:
+            self.base.render.clear_light(light)
+            light.remove_node()
+        self.lights = []
+        if self.room is not None:
+            self.room.remove_node()
+            self.room = None
+        # The prop and the controlled joints all hang under the actor, so
+        # removing it takes them too. cleanup() frees the animation bundles;
+        # remove_node() alone leaves them alive and leaks a model per swap.
+        self.actor.cleanup()
+        self.actor.remove_node()
+        if self.pivot is not None:
+            self.pivot.remove_node()
+            self.pivot = None
+        self.prop = None
+
+    def next_avatar(self):
+        """The model after this one in the switching order, or None if this
+        is the only one built."""
+        built = available_avatars(self.registry)
+        if len(built) < 2:
+            return None
+        if self.name not in built:
+            return built[0]
+        return built[(built.index(self.name) + 1) % len(built)]
+
+    def swap(self, name: str) -> None:
+        """Replace the model with `name`, keeping window, camera and state.
+
+        On failure the PREVIOUS model is restored and the error re-raised, so
+        a broken drop-in costs one notice, not Johnny.
+        """
+        previous = self.name
+        self._teardown()
+        try:
+            self._build(name)
+        except Exception:
+            if self.actor is not None and not self.actor.is_empty():
+                self._teardown()
+            self._build(previous)
+            raise
+        if self.flash is not None:
+            self.flash.fire(self._t)
 
     def _init_shader(self):
         """Install the PBR shader the glTF materials are written against.
@@ -482,7 +664,9 @@ class AvatarScene:
         carrying a scale above the meshes -- as the rescaled keanu export does
         -- is out by the scale factor and frames empty air.
         """
-        head = self.actor.find(f"**/{self.config['head_mesh']}")
+        head_mesh = self.config.get("head_mesh")
+        head = (self.actor.find(f"**/{head_mesh}") if head_mesh
+                else self.actor.find("**/__no_head_mesh__"))
 
         if head.is_empty():
             low, high = self.actor.get_tight_bounds()
@@ -604,6 +788,8 @@ class AvatarScene:
             self.pivot.set_h(current + (self.gaze - current) * 0.08)
         if self.film is not None:
             self.film.step()
+        if self.flash is not None:
+            self.flash.step(elapsed)
 
     def play(self, name: str, loop: bool = True) -> bool:
         """Switch to another clip, e.g. "smoking". False if it has none.
