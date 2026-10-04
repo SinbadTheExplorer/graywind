@@ -10,5 +10,6 @@
   },
   "idle_anim": "anim",
   "portal_framing": 1.6,
-  "portal_rise": 0.12
+  "portal_rise": 0.12,
+  "glow": 16
 }

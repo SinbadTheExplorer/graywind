@@ -168,6 +168,28 @@ At the owner's request ("remove the old johnny model, focus on the mech"):
     corner of the head is inside from the nominal eye. Skipped when a model
     sets `portal_rise` (the mech crops on purpose, as the reel does).
 
+## Glow + soft shadows (2026-10-04) — `avatar/look.py`
+
+- **Soft shadows:** simplepbr's one-tap shadow lookup is patched (in its own
+  shader-source dict, before init) to a 16-tap Poisson disc, radius
+  `SHADOW_RADIUS` 0.0025 UV (~5 texels). Refuses, leaving stock shadows, if
+  simplepbr's shadow text ever changes.
+- **Glow (bloom):** bright-pass → blur X → blur Y at quarter res on
+  simplepbr's FilterManager, added in HDR inside a copy of simplepbr's own
+  tonemap shader. Threshold 1.3 on the strongest CHANNEL, strength 0.9.
+- **Per-model `glow`** multiplies emissive materials via copied materials
+  (`replace_material`) so it cannot compound through the model cache.
+  mech-bust 16, zbrush-mech 4 (local).
+- **Three wrong turns, recorded so nobody repeats them:** (1) a white blob at
+  the top was NOT the ceiling's lighting -- it was the softbox reflecting off
+  the mech's crest just above the frame, glowing at threshold 0.85; fixed by
+  threshold 1.3. (The ceiling is still kept off the direct lights, which is
+  harmless and matches the reel's dark top.) (2) Perceptual luminance scored
+  the pure-red eyes at 1.28 even at 6x -- the bright pass uses max(r,g,b).
+  (3) "Emission-only" renders need lights set to BLACK; removing every light
+  makes simplepbr draw everything unlit at full brightness.
+- **Hulkbuster is dormant** (`"dormant": true`): on disk, off M, never default.
+
 ## UNVERIFIED (needs the owner, on the Mac)
 
 - **Everything with a real webcam.** The cloud box has no camera. The maths is

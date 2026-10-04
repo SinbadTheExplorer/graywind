@@ -123,6 +123,7 @@ Let the inspector write `avatar.json` for you, then fix the credit by hand:
 | `model` | yes | file name inside the folder: `.glb`, `.gltf` or `.bam` |
 | `credit` | yes | shown on screen. For CC BY models the credit IS the licence condition |
 | `head_mesh` | no | mesh to frame on; without it the top `head_fraction` of the model is assumed to be the head |
+| `glow` | no | multiplies the model's emissive (self-lit) materials, so its lights pass the glow threshold: the mech's eyes use 16. Leave out for 1 |
 | `dormant` | no | `true` keeps the model on disk but out of the M rotation and never the default; `MAVIS_AVATAR=<name>` still loads it |
 | `head_fraction` | no | used only without `head_mesh`: 0.19 (default) for a full figure, ~0.5 for a bust, ~0.9 for a head alone |
 | `mouth` | no | `{"kind": "slider", "slider": "jawOpen"}` (a morph), `{"kind": "joint", "joint": "...", "axis": "p", "degrees": 14}` (a jaw bone), `{"kind": "nod", "degrees": 3}` (the whole model dips with his voice), or omit for no lip-sync |

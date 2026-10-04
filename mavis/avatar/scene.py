@@ -36,6 +36,7 @@ CAPTION_TOP = -0.42
 # Last row may not reach the credit band below it.
 CAPTION_FLOOR = -0.88
 
+from avatar import look
 from avatar import portal as portal_mod
 from avatar import props, stage
 
@@ -169,7 +170,7 @@ EXTRA_DIR = ASSET_DIR / "extra"
 # required; see assets/avatar/ATTRIBUTION.md, "Adding your own models".
 _EXTRA_KEYS = {"model", "credit", "head_mesh", "head_fraction", "mouth",
                "idle_anim", "anims", "idle_variety", "poses", "sway",
-               "portal_framing", "portal_rise", "dormant"}
+               "portal_framing", "portal_rise", "dormant", "glow"}
 
 
 def _read_extra(folder: Path):
@@ -480,6 +481,7 @@ class AvatarScene:
         self.lights = []
         self.film = None
         self.flash = None
+        self.bloom = None
         self.gaze = 0.0
         self.actor = None
         self.visible = True
@@ -552,6 +554,7 @@ class AvatarScene:
             self._bundle.forceUpdate()
 
         self.prop = self._attach_prop()
+        self._boost_emission(float(self.config.get("glow", 1.0)))
 
         if self.portal is None:
             self._frame_head()
@@ -587,6 +590,27 @@ class AvatarScene:
             self.actor.setBlend(animBlend=True)
         if not self.visible:
             self.actor.hide()
+
+    def _boost_emission(self, factor: float) -> None:
+        """Multiply every glowing material's emission by `factor`.
+
+        glTF's KHR_materials_emissive_strength (how the mech's eye-lights are
+        made bright) is ignored by panda3d-gltf, so they arrive at strength 1:
+        lit, but too dim to pass the glow's threshold. Materials are REPLACED
+        with boosted copies on this actor only -- the loaded originals are
+        shared through Panda3D's model cache, so editing them in place would
+        compound on every swap back to the model.
+        """
+        if factor == 1.0:
+            return
+        from panda3d.core import Material
+        for mat in self.actor.find_all_materials():
+            e = mat.get_emission()
+            if not mat.has_emission() or max(e[0], e[1], e[2]) <= 0:
+                continue
+            boosted = Material(mat)
+            boosted.set_emission(mat.get_emission() * factor)
+            self.actor.replace_material(mat, boosted)
 
     def _teardown(self) -> None:
         """Remove the current model and everything built around it."""
@@ -656,9 +680,17 @@ class AvatarScene:
         existing = getattr(self.base, "_mavis_pbr_pipeline", None)
         if existing is not None:
             self.pipeline = existing
+            self.bloom = getattr(self.base, "_mavis_bloom", None)
             return
 
         import simplepbr
+
+        if self.portal is not None:
+            # Must precede init: it patches the shader source simplepbr is
+            # about to compile. False means simplepbr changed; it keeps its
+            # own hard shadows rather than risk a shader that will not build.
+            if not look.soften_shadows():
+                print("soft shadows unavailable: simplepbr's shadow code changed")
 
         # Shadows only behind the glass: the overlay has nothing to cast onto,
         # and the shadow pass is a second render of the whole model.
@@ -672,6 +704,12 @@ class AvatarScene:
             # Something for metal to reflect. Without it PBR metal reflects
             # black: the mech rendered as a murky silhouette. See stage.
             self.pipeline.env_map = stage.studio_env_map()
+            try:
+                self.bloom = look.Bloom(self.pipeline)
+            except Exception as exc:     # never lose Johnny to an effect
+                print(f"glow unavailable: {exc}")
+                self.bloom = None
+            self.base._mavis_bloom = self.bloom
 
     def _release_camera(self):
         """Take the camera away from ShowBase's default mouse trackball.
@@ -869,6 +907,8 @@ class AvatarScene:
             self.film.step()
         if self.flash is not None:
             self.flash.step(elapsed)
+        if self.bloom is not None:
+            self.bloom.step()
 
     def play(self, name: str, loop: bool = True) -> bool:
         """Switch to another clip, e.g. "smoking". False if it has none.

@@ -149,6 +149,7 @@ def light_room(render, target: NodePath, screen, depth: float):
     key_np.set_pos(head[0] + screen.width * 0.55, -0.30, head[2] + screen.height * 1.5)
     key_np.look_at(head[0], head[1], head[2] - 0.03)
     render.set_light(key_np)
+
     lights.append(key_np)
 
     # Rims sit BEHIND him, near the wall, so they light his edges and not his
@@ -176,6 +177,16 @@ def light_room(render, target: NodePath, screen, depth: float):
     fill_np = render.attach_new_node(fill)
     render.set_light(fill_np)
     lights.append(fill_np)
+
+    # The ceiling takes only the fill (and the environment). The rim and
+    # kicker sit a few cm under it and threw a specular hot spot there that
+    # the glow blew up into a white blob at the top of the frame -- found by
+    # hiding the ceiling, then the point lights, until it went. The reel's
+    # top is dark anyway.
+    ceiling = render.find("**/mavis-room/ceiling")
+    if not ceiling.is_empty():
+        for light in (key_np, rim_np, kicker_np):
+            ceiling.set_light_off(light)
     return lights
 
 
