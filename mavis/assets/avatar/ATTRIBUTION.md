@@ -169,6 +169,14 @@ Local-only drop-ins in use (2026-10-04), not committed:
   https://sketchfab.com/3d-models/hulkbusters-helmet-mcu-version-63e0d0c4b342413eaeb9528fdd851311
   -- Marvel design, so local only. DORMANT (owner's call, 2026-10-04). Static; nods. Centred close-up
   (`portal_framing` 1.7, `portal_rise` 0.02).
+- `spartan` -- "Spartan Armour MKV - Halo Reach" by McCarthy3D, CC BY 4.0,
+  https://sketchfab.com/3d-models/spartan-armour-mkv-halo-reach-57070b2fd9ff472c8988e76d8c5cbe66
+  -- Microsoft/343's Halo design, so local only. Converted with
+  `fix_sketchfab_glb --drop Floor_lambert2_0 --max-texture 2048`. Its clip
+  "Take 001" is NOT used: playing it balloons the arms into wings (posed
+  size x2.6 -- the export's rest and bind poses disagree and panda3d-gltf
+  applies the difference twice), so it stands in its bind pose, sways and
+  nods. Chest lights `glow` 6.
 - `zbrush-mech` -- from a Sketchfab source zip named
   "zbrush-for-concept-mech-design-dver"; author and licence NOT yet
   confirmed, so local only until they are. Static; nods.

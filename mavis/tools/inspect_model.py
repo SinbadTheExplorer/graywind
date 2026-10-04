@@ -49,7 +49,18 @@ def inspect(path: str) -> dict:
     joints = [j.getName() for j in actor.getJoints()] if rigged else []
     anims = list(actor.getAnimNames())
 
-    head = next((m for m in meshes if "head" in m.lower()), None)
+    # Armoured characters name it "Helmet" (the Spartan), busts "head". Of
+    # the candidates take the BIGGEST: the first match alphabetically was the
+    # Spartan's ear piece, "Helmet_Spartan_Ear_Mat_0".
+    def size(name):
+        lo, hi = actor.find(f"**/{name}").get_tight_bounds(actor)
+        return (hi - lo).length()
+    head = None
+    for word in ("head", "helmet"):
+        found = [m for m in meshes if word in m.lower()]
+        if found:
+            head = max(found, key=size)
+            break
     jaw = next((j for j in joints if "jaw" in j.lower()), None)
     morph = next((m for m in MOUTH_MORPHS if m in sliders), None)
     if not rigged:
@@ -73,6 +84,20 @@ def inspect(path: str) -> dict:
     else:
         mouth = {"kind": "none"}
     idle = next((a for a in anims if "idle" in a.lower()), anims[0] if anims else None)
+    if idle and rigged:
+        # Some exports bind the mesh in one pose and store a different rest
+        # pose; panda3d-gltf then applies the difference twice the moment any
+        # clip plays (the Spartan's arms ballooned into wings). The tell: the
+        # model gets much bigger when posed than when not.
+        lo, hi = actor.get_tight_bounds()
+        actor.pose(idle, 0)
+        actor.update(force=True)
+        plo, phi = actor.get_tight_bounds()
+        grow = max((phi[i] - plo[i]) / max(hi[i] - lo[i], 1e-6) for i in range(3))
+        if grow > 1.25:
+            print(f"clip {idle!r} DEFORMS the mesh when played (posed size x{grow:.1f}); "
+                  "left out -- the model will stand in its bind pose and sway")
+            idle = None
 
     print(f"rigged  {rigged}" + ("" if rigged else
           "  (static mesh: no lip-sync or clips; it will sway and nod)"))

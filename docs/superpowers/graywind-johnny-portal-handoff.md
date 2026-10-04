@@ -190,6 +190,17 @@ At the owner's request ("remove the old johnny model, focus on the mech"):
   makes simplepbr draw everything unlit at full brightness.
 - **Hulkbuster is dormant** (`"dormant": true`): on disk, off M, never default.
 
+## Spartan + tooling (2026-10-04)
+
+- `spartan` added locally (Halo IP: never committed). See ATTRIBUTION.md.
+- `fix_sketchfab_glb` gained `--drop MESH` (Sketchfab display floors) and
+  `--max-texture N` (4K -> 2K: identical on screen, a quarter of the graphics
+  memory on the 8GB M2).
+- `inspect_model` now: picks the BIGGEST head/helmet mesh (it chose the
+  Spartan's ear piece); and refuses a clip that inflates the model when
+  played (>1.25x posed size), printing why. Pinned by tests on the mech.
+- Lineup render of all four models after in-window swaps: consistent look.
+
 ## UNVERIFIED (needs the owner, on the Mac)
 
 - **Everything with a real webcam.** The cloud box has no camera. The maths is

@@ -18,7 +18,15 @@ Built for "Mech bust" (Just8), and general for the same failure modes:
      regrouped under one new "Armature" node (skinned meshes ignore their
      own node transform, glTF 2.0 spec, so nothing moves).
 
-  .venv/bin/python -m tools.fix_sketchfab_glb unpacked.glb fixed.glb
+  5. Display props -- Sketchfab scenes often ship a floor or backdrop mesh
+     (`--drop Floor_lambert2_0`), which in portal mode is a slab floating in
+     front of the room. Dropped by mesh name.
+  6. 4K textures -- `--max-texture 2048`. On the 8GB M2 six 4K maps are
+     ~400MB of graphics memory, and no model covers more than ~1200px of the
+     screen, so 2K is visually identical.
+
+  .venv/bin/python -m tools.fix_sketchfab_glb unpacked.glb fixed.glb \
+      [--drop MESHNAME ...] [--max-texture 2048]
   npx -y @gltf-transform/cli@4 prune fixed.glb final.glb     # drop orphans
 
 Needs Pillow (`pip install pillow`) and numpy.
@@ -63,7 +71,7 @@ def _append(j, binary, data):
     return len(j["bufferViews"]) - 1
 
 
-def reencode_images(j, binary):
+def reencode_images(j, binary, max_size=None):
     from PIL import Image
     for img in j.get("images", []):
         if "bufferView" not in img:
@@ -71,7 +79,12 @@ def reencode_images(j, binary):
         v = j["bufferViews"][img["bufferView"]]
         s = v.get("byteOffset", 0)
         im = Image.open(io.BytesIO(bytes(binary[s:s + v["byteLength"]])))
-        if img.get("mimeType") in ("image/jpeg", "image/png") and im.format != "WEBP":
+        too_big = max_size and max(im.size) > max_size
+        if too_big:
+            k = max_size / max(im.size)
+            im = im.resize((max(1, round(im.size[0] * k)), max(1, round(im.size[1] * k))),
+                           Image.LANCZOS)
+        elif img.get("mimeType") in ("image/jpeg", "image/png") and im.format != "WEBP":
             continue
         out = io.BytesIO()
         if im.mode in ("RGBA", "LA") and im.getchannel("A").getextrema()[0] < 255:
@@ -159,13 +172,32 @@ def group_armature(j):
     print(f"grouped skeleton root and {len(loose) - 1} meshes under Armature")
 
 
-def main(src, dst):
+def drop_meshes(j, names):
+    """Detach every node whose mesh is named in `names` (prune removes the data)."""
+    names = set(names)
+    found = set()
+    for node in j["nodes"]:
+        mesh = node.get("mesh")
+        if mesh is not None and j["meshes"][mesh].get("name") in names:
+            found.add(j["meshes"][mesh]["name"])
+            del node["mesh"]
+            node.pop("skin", None)
+    missing = names - found
+    if missing:
+        raise SystemExit(f"--drop: no mesh named {sorted(missing)}; "
+                         f"meshes are {[m.get('name') for m in j['meshes']]}")
+    print(f"dropped {sorted(found)}")
+
+
+def main(src, dst, drop=(), max_texture=None):
     j, binary = read_glb(src)
+    if drop:
+        drop_meshes(j, drop)
     blocked = {"EXT_meshopt_compression", "KHR_mesh_quantization"} & set(j.get("extensionsUsed", []))
     if blocked:
         raise SystemExit(f"{sorted(blocked)} present: run `npx -y @gltf-transform/cli@4 "
                          f"dequantize {src} unpacked.glb` first")
-    reencode_images(j, binary)
+    reencode_images(j, binary, max_texture)
     merge_skins(j, binary)
     group_armature(j)
     write_glb(dst, j, binary)
@@ -173,7 +205,13 @@ def main(src, dst):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print(__doc__)
-        sys.exit(2)
-    main(sys.argv[1], sys.argv[2])
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("src")
+    ap.add_argument("dst")
+    ap.add_argument("--drop", nargs="*", default=(), metavar="MESH",
+                    help="mesh names to remove (display floors, backdrops)")
+    ap.add_argument("--max-texture", type=int, default=None,
+                    help="downscale textures whose longest side exceeds this")
+    a = ap.parse_args()
+    main(a.src, a.dst, a.drop, a.max_texture)
