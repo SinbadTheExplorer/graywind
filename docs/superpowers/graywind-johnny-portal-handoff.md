@@ -201,6 +201,28 @@ At the owner's request ("remove the old johnny model, focus on the mech"):
   played (>1.25x posed size), printing why. Pinned by tests on the mech.
 - Lineup render of all four models after in-window swaps: consistent look.
 
+## Matching the reel frame-for-frame (2026-10-04)
+
+Judged side by side against reel frames, in this order of visual weight:
+- **No box from straight on.** The room is sized to what the window shows at
+  the BACK wall, so square-on you see only backdrop; walls appear as you lean.
+  Pinned by `test_no_side_wall_or_ceiling_is_in_view_from_straight_on`.
+- **Grade:** `look.grade_lut` (33^3 LUT via simplepbr `sdr_lut`, passed AT
+  init): 45% S-curve, -12% saturation, navy shadows, warm highlights. simplepbr's
+  LUT path uses textureSize(), absent in GLSL 1.20 (Mesa failed to compile it);
+  `look.fix_lut_for_glsl120` states the size instead.
+- **Lighting:** key moved higher-in-front (from steeply overhead, which left
+  close-up faces black); red rim moved behind/above as an EDGE (it washed the
+  mech's face and the Spartan's shoulders red); exposure +0.35 stops; darker
+  navy concrete; brighter viewer-side fill panel in the studio env.
+- **Gaze pitch:** he now tilts to look at your eye HEIGHT too (+/-10 deg) --
+  the reel's mech looks down at the camera, which is why its plates catch
+  the top light.
+- **Mech framing** `portal_framing` 1.15, `portal_rise` 0 (the reel's close-up).
+- **Breathing** for clip-less models (Spartan, ZBrush mech, Hulkbuster): pivot
+  bob of 0.6% of visible height over 4.2 s. Skipped for animated models.
+- **Spartan visor:** gold mirror via the new `tools/gloss_by_colour.py`.
+
 ## UNVERIFIED (needs the owner, on the Mac)
 
 - **Everything with a real webcam.** The cloud box has no camera. The maths is

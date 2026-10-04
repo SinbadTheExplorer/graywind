@@ -153,6 +153,8 @@ Where to find models, and what each licence lets you do:
 - a GLB that will not load (compressed geometry, WebP textures, several skins
   on one skeleton, meshes beside their bones): `tools/fix_sketchfab_glb.py`,
   after `npx -y @gltf-transform/cli@4 dequantize` if it is meshopt-compressed;
+- a visor/glass/chrome painted into a shared texture, to make mirror-like:
+  `tools/gloss_by_colour.py` (selects by colour; writes `--preview` mask);
 - a "source" zip holding `model.dae` plus loose `*_albedo/_normal/_metallic/
   _roughness/_emissive/_AO` images: `tools/collada_to_glb.py` (needs
   `pip install trimesh pycollada pillow`), then gltf-transform `prune`.
@@ -176,7 +178,10 @@ Local-only drop-ins in use (2026-10-04), not committed:
   "Take 001" is NOT used: playing it balloons the arms into wings (posed
   size x2.6 -- the export's rest and bind poses disagree and panda3d-gltf
   applies the difference twice), so it stands in its bind pose, sways and
-  nods. Chest lights `glow` 6.
+  nods. Chest lights `glow` 6. Visor made gold-mirror with
+  `tools/gloss_by_colour --material Spartan_Helmet_Mat --hue 20 55 --min-sat
+  0.45 --min-val 0.2 --roughness 0.28` (its map called the visor smooth but
+  non-metal: matte orange).
 - `zbrush-mech` -- from a Sketchfab source zip named
   "zbrush-for-concept-mech-design-dver"; author and licence NOT yet
   confirmed, so local only until they are. Static; nods.

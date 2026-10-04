@@ -166,6 +166,23 @@ def gaze_heading(eye, subject_y: float, limit_deg: float = 9.0) -> float:
     return max(-limit_deg, min(limit_deg, angle))
 
 
+def gaze_pitch(eye, subject_y: float, subject_z: float,
+               limit_deg: float = 10.0) -> float:
+    """Degrees to tilt him so he looks at the viewer's eye HEIGHT, clamped.
+
+    Positive P lifts a Panda3D model's nose. He sits above a seated viewer's
+    eyes, so this is usually a slight tilt DOWN -- the reel's mech looks down
+    at the camera, and it is why its plates catch the top light instead of
+    facing level into shadow. Follows you as you stand or slouch.
+    """
+    _x, y, z = eye
+    run = subject_y - y
+    if run <= 0:
+        return 0.0
+    angle = math.degrees(math.atan2(z - subject_z, run))
+    return max(-limit_deg, min(limit_deg, angle))
+
+
 class OneEuroFilter:
     """Casiez et al.'s 1-euro filter (CHI 2012), one scalar channel.
 

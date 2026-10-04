@@ -119,3 +119,40 @@ def test_hud_is_pinned_to_the_top_left_of_the_glass(avatar):
     avatar.show_hud("JOHNNY // LOCKED")
     assert avatar._hud.getText() == "JOHNNY // LOCKED"
     assert avatar._hud.get_parent() == avatar.base.a2dTopLeft
+
+
+def test_a_model_without_a_clip_breathes_and_an_animated_one_does_not(base):
+    import math
+    from avatar import portal
+    path = str(scene.EXTRA_DIR / "mech-bust" / "mech_bust.glb")
+    reg = {"still": {"path": path, "credit": "x", "mouth": {"kind": "none"},
+                     "head_mesh": "mech_mech_head_mat_0"},
+           "mech-bust": scene.all_avatars()["mech-bust"]}
+    sc = scene.AvatarScene(base, "still", portal=portal.Screen(), registry=reg)
+    assert not sc.animated
+    zs = []
+    for i in range(int(scene.BREATH_PERIOD * 30)):
+        sc.idle(i / 30)
+        zs.append(sc.pivot.get_z())
+    assert max(zs) - min(zs) == pytest.approx(2 * sc._breath, rel=0.05)
+    sc.swap("mech-bust")
+    assert sc.animated
+    z0 = sc.pivot.get_z()
+    for i in range(60):
+        sc.idle(10 + i / 30)
+    assert sc.pivot.get_z() == pytest.approx(z0)
+    sc._teardown()
+
+
+def test_no_side_wall_or_ceiling_is_in_view_from_straight_on(avatar):
+    """Sat square-on you see only the backdrop, as in the reel; the walls
+    appear only as you lean. Sized to his depth instead, the room showed its
+    walls from dead centre and read as a diorama box."""
+    eye_d = -SCREEN.nominal_eye[1]
+    low, high = avatar.room.get_tight_bounds(avatar.base.render)
+    back = avatar.room_depth
+    # Where the window's edges project onto the back wall from the nominal eye.
+    reach_x = SCREEN.width / 2 * (eye_d + back) / eye_d
+    reach_z = SCREEN.height / 2 * (eye_d + back) / eye_d
+    assert high[0] >= reach_x - 1e-4 and -low[0] >= reach_x - 1e-4
+    assert high[2] >= reach_z - 1e-4

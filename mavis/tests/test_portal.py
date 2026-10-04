@@ -177,3 +177,9 @@ def test_smoother_reacquires_without_a_jump():
     # One frame after the face reappears the view has moved toward it, but
     # not all the way: no snap.
     assert shown[0] < back[0] < 0.15
+
+
+def test_gaze_pitch_looks_down_at_a_viewer_below_and_is_clamped():
+    assert portal.gaze_pitch((0, -0.6, 0.0), 0.18, 0.05) < 0      # viewer below
+    assert portal.gaze_pitch((0, -0.6, 0.3), 0.18, 0.05) > 0      # viewer above
+    assert portal.gaze_pitch((0, -0.6, -5.0), 0.18, 0.05) == pytest.approx(-10.0)

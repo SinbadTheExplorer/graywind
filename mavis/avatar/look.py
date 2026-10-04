@@ -212,3 +212,61 @@ class Bloom:
     def set_strength(self, strength: float) -> None:
         self.strength = strength
         self.post.set_shader_input("bloom_strength", strength)
+
+
+LUT_SIZE = 33
+_LUT_SIZE_QUERY = "vec3 lut_size = vec3(textureSize(sdr_lut, 0));"
+
+
+def fix_lut_for_glsl120() -> bool:
+    """Make simplepbr's LUT path compile under GLSL 1.20. Call before init.
+
+    simplepbr asks the LUT for its size with textureSize(), which GLSL 1.20
+    does not have, so its tonemap fails to compile on any non-core-profile
+    context the moment a LUT is set ("no function with name 'textureSize'"
+    -- seen on Mesa). The size is ours (LUT_SIZE), so state it.
+    """
+    from simplepbr.shaders import shaders
+    src = shaders["tonemap.frag"]
+    if _LUT_SIZE_QUERY not in src:
+        return f"vec3({float(LUT_SIZE)})" in src
+    shaders["tonemap.frag"] = src.replace(
+        _LUT_SIZE_QUERY, f"vec3 lut_size = vec3({float(LUT_SIZE)});")
+    return True
+
+
+def grade_lut(size: int = LUT_SIZE) -> Texture:
+    """A 3D colour-grading table for simplepbr's `sdr_lut`: the reel's grade.
+
+    Applied after tonemapping, to the finished image. The reel reads as
+    *photographed*: deep but not crushed blacks that lean navy, a gentle
+    S-curve for punch in the midtones, highlights a touch warm against the
+    cool room, and colour a little held back. Each step is small; together
+    they are what separates "rendered" from "shot".
+    """
+    import numpy as np
+    axis = np.linspace(0.0, 1.0, size, dtype=np.float32)
+    b, g, r = np.meshgrid(axis, axis, axis, indexing="ij")   # z=blue, y=green, x=red
+    rgb = np.stack([r, g, b], axis=-1)
+
+    # S-curve: 45% of the way to smoothstep. Deeper shadows, brighter highs.
+    s_curve = rgb * rgb * (3.0 - 2.0 * rgb)
+    rgb = rgb + 0.45 * (s_curve - rgb)
+    luma = (rgb @ np.array([0.2126, 0.7152, 0.0722], dtype=np.float32))[..., None]
+    # Hold saturation back 12%.
+    rgb = luma + 0.88 * (rgb - luma)
+    # Split tone: navy into the shadows, warmth into the highlights.
+    shadow = (1.0 - luma) ** 2
+    rgb = rgb + shadow * np.array([-0.004, 0.0, 0.012], dtype=np.float32)
+    rgb = rgb * (1.0 + luma * np.array([0.025, 0.0, -0.03], dtype=np.float32))
+    rgb = np.clip(rgb, 0.0, 1.0)
+
+    tex = Texture("mavis-grade")
+    tex.setup_3d_texture(size, size, size, Texture.T_unsigned_byte, Texture.F_rgb8)
+    tex.set_ram_image_as((rgb * 255.0 + 0.5).astype(np.uint8).tobytes(), "RGB")
+    from panda3d.core import SamplerState
+    for wrap in (tex.set_wrap_u, tex.set_wrap_v, tex.set_wrap_w):
+        wrap(SamplerState.WM_clamp)
+    tex.set_minfilter(SamplerState.FT_linear)
+    tex.set_magfilter(SamplerState.FT_linear)
+    return tex

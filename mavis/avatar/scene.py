@@ -153,6 +153,14 @@ DEFAULT_FOV = 30.0
 # that leaning visibly uncovers the side walls, shallow enough that the head
 # still fills the window from a normal sitting distance.
 PORTAL_DEPTH = 0.18
+# Breathing for models with no working clip (portal mode): a slow vertical
+# rise and fall of this fraction of the visible height, over BREATH_PERIOD
+# seconds -- about a resting human breath. Without it a static model hangs
+# like a museum piece; the mech's own clip already breathes, so it is skipped.
+BREATH_DEPTH = 0.006
+BREATH_PERIOD = 4.2
+# simplepbr exposure in stops, portal mode only.
+PORTAL_EXPOSURE = 0.35
 # Head heights the window spans from the nominal eye. Tighter than the
 # overlay's torso portrait (FRAMING): the reel's subject is big and close,
 # cropped by the screen's edges, and a large subject near the glass is what
@@ -483,6 +491,7 @@ class AvatarScene:
         self.flash = None
         self.bloom = None
         self.gaze = 0.0
+        self.gaze_p = 0.0
         self.actor = None
         self.visible = True
 
@@ -691,19 +700,29 @@ class AvatarScene:
             # own hard shadows rather than risk a shader that will not build.
             if not look.soften_shadows():
                 print("soft shadows unavailable: simplepbr's shadow code changed")
+            if not look.fix_lut_for_glsl120():
+                print("colour grade may not compile: simplepbr's tonemap changed")
 
         # Shadows only behind the glass: the overlay has nothing to cast onto,
         # and the shadow pass is a second render of the whole model.
         # MSAA only behind the glass: a full-screen window makes jagged
         # silhouette edges against the dark wall the first thing you notice,
         # where the small overlay window never showed them.
+        # The grade goes in AT init: setting sdr_lut later makes simplepbr
+        # rebuild its whole post chain, orphaning the glow stages.
         self.pipeline = simplepbr.init(msaa_samples=4 if self.portal is not None else 0,
-                                       enable_shadows=self.portal is not None)
+                                       enable_shadows=self.portal is not None,
+                                       sdr_lut=(look.grade_lut()
+                                                if self.portal is not None else None))
         self.base._mavis_pbr_pipeline = self.pipeline
         if self.portal is not None:
             # Something for metal to reflect. Without it PBR metal reflects
             # black: the mech rendered as a murky silhouette. See stage.
             self.pipeline.env_map = stage.studio_env_map()
+            # A third of a stop up: matched side by side against the reel,
+            # whose silver plates read brighter than ours did. Only a uniform,
+            # so it is safe after init (no post-chain rebuild).
+            self.pipeline.exposure = PORTAL_EXPOSURE
             try:
                 self.bloom = look.Bloom(self.pipeline)
             except Exception as exc:     # never lose Johnny to an effect
@@ -809,12 +828,20 @@ class AvatarScene:
 
         if "portal_rise" not in self.config:
             self._keep_head_in_window(eye_distance)
+        # Where breathing bobs him from (see idle), and how far: a sliver of
+        # the window's height, felt rather than seen.
+        self._pivot_z0 = self.pivot.get_z()
+        self._breath = visible * BREATH_DEPTH
 
         low, high = self.actor.get_tight_bounds(self.base.render)
         self.room_depth = max(high[1], PORTAL_DEPTH) + stage.BACK_GAP
-        # The room is what the window reveals at his depth (see stage), so
-        # he always fits inside it however he is framed.
-        reveal = (eye_distance + PORTAL_DEPTH) / eye_distance
+        # The room is what the window reveals at the BACK WALL's depth from
+        # the nominal eye: sat straight on, no side wall or ceiling is in view
+        # -- just the backdrop, as in the reel -- and they swing into view
+        # only as you lean, which is when depth needs showing. (Sized to his
+        # own depth, the first version showed the walls from dead centre and
+        # read as a diorama box.)
+        reveal = (eye_distance + self.room_depth) / eye_distance
         # The floor goes at his feet (a hair below, so soles do not z-fight)
         # -- but never ABOVE the lowest point the window shows at the back
         # wall from the nominal eye. A full figure's feet are always below
@@ -863,6 +890,8 @@ class AvatarScene:
         if self.portal is None:
             return
         self.gaze = portal_mod.gaze_heading(eye, PORTAL_DEPTH)
+        if self.pivot is not None:
+            self.gaze_p = portal_mod.gaze_pitch(eye, PORTAL_DEPTH, self.pivot.get_z())
         if self.base.camLens is None:
             return
         portal_mod.apply_off_axis(self.base.camera, self.base.camLens, eye,
@@ -903,6 +932,11 @@ class AvatarScene:
             # head that turns at camera rate still reads as mechanical.
             current = self.pivot.get_h()
             self.pivot.set_h(current + (self.gaze - current) * 0.08)
+            pitch = self.pivot.get_p()
+            self.pivot.set_p(pitch + (self.gaze_p - pitch) * 0.08)
+            if not self.animated:
+                self.pivot.set_z(self._pivot_z0 + self._breath * math.sin(
+                    2.0 * math.pi * elapsed / BREATH_PERIOD))
         if self.film is not None:
             self.film.step()
         if self.flash is not None:

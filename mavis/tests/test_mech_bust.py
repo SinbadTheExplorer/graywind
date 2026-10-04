@@ -60,5 +60,5 @@ def test_studio_env_map_is_lit_from_above():
 
 
 def test_portal_framing_is_per_model(mech):
-    assert mech.config["portal_framing"] == 1.6
+    assert mech.config["portal_framing"] == 1.15     # the reel's close-up
     assert scene._EXTRA_KEYS >= {"portal_framing", "portal_rise"}

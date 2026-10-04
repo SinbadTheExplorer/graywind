@@ -38,8 +38,8 @@ BACK_GAP = 0.20
 # One repeat of the concrete texture, metres.
 TILE = 0.75
 # Concrete: dark blue-grey, the reel's wall. Values are albedo, before light.
-CONCRETE_RGB = (0.065, 0.08, 0.12)
-RIM_RGB = (0.85, 0.06, 0.05)         # the reel's red, kept to an accent
+CONCRETE_RGB = (0.042, 0.052, 0.085)
+RIM_RGB = (0.45, 0.04, 0.03)         # the reel's red: an EDGE, never a wash
 COOL_RIM_RGB = (0.25, 0.35, 0.6)
 
 
@@ -134,7 +134,7 @@ def light_room(render, target: NodePath, screen, depth: float):
     head = target.get_pos(render)
 
     key = Spotlight("portal-key")
-    key.set_color(Vec4(3.6, 3.5, 3.4, 1))
+    key.set_color(Vec4(4.4, 4.3, 4.15, 1))
     key.set_shadow_caster(True, 2048, 2048)
     # Wide enough that the cone's EDGE never shows. simplepbr ignores the
     # spot exponent and cuts the cone off hard, so a tight cone drew a crisp
@@ -146,7 +146,11 @@ def light_room(render, target: NodePath, screen, depth: float):
     # High and a little to the viewer's right, in front of the glass: the
     # shadow drops onto the back wall below and to his left, in view, and
     # the brow, nose and shoulders catch top light as in the reel.
-    key_np.set_pos(head[0] + screen.width * 0.55, -0.30, head[2] + screen.height * 1.5)
+    # Higher-and-in-front, not straight overhead: from steeply above, the
+    # forward-facing plates of a face (the mech's, the Spartan's visor) got
+    # almost nothing and went black in a close-up. This lights the face the
+    # way the reel's is, and still drops the shadow onto the wall behind.
+    key_np.set_pos(head[0] + screen.width * 0.45, -0.42, head[2] + screen.height * 0.75)
     key_np.look_at(head[0], head[1], head[2] - 0.03)
     render.set_light(key_np)
 
@@ -158,7 +162,11 @@ def light_room(render, target: NodePath, screen, depth: float):
     rim.set_color(Vec4(*RIM_RGB, 1))
     rim.set_attenuation((1, 0, 30))
     rim_np = render.attach_new_node(rim)
-    rim_np.set_pos(head[0] - screen.width * 0.35, head[1] + 0.12, head[2] + 0.02)
+    # Well behind and above him, so it only catches his silhouette. Level
+    # with his head and 12cm back (the first placement) it washed red across
+    # the mech's faceplate and the Spartan's shoulders; in the reel the face
+    # is clean grey-white and the red is paint.
+    rim_np.set_pos(head[0] - screen.width * 0.35, head[1] + 0.26, head[2] + 0.10)
     render.set_light(rim_np)
     lights.append(rim_np)
 
@@ -166,7 +174,7 @@ def light_room(render, target: NodePath, screen, depth: float):
     kicker.set_color(Vec4(*COOL_RIM_RGB, 1))
     kicker.set_attenuation((1, 0, 30))
     kicker_np = render.attach_new_node(kicker)
-    kicker_np.set_pos(head[0] + screen.width * 0.38, head[1] + 0.10, head[2] + 0.06)
+    kicker_np.set_pos(head[0] + screen.width * 0.38, head[1] + 0.24, head[2] + 0.12)
     render.set_light(kicker_np)
     lights.append(kicker_np)
 
@@ -227,7 +235,7 @@ def studio_env_map(size: int = 64):
         face(dark),                                            # +x
         face(dark),                                            # -x
         face((0.03, 0.01, 0.01)),                              # +y behind him: a red hint
-        face(dark, (0.25, 0.3, 0.75, 0.7), (0.22, 0.24, 0.30)),  # -y viewer side: dim fill panel
+        face(dark, (0.2, 0.25, 0.8, 0.75), (0.40, 0.42, 0.48)),  # -y viewer side: fill panel (dark plates reflect it)
         face(dark, (0.2, 0.2, 0.8, 0.8), (1.0, 0.98, 0.95)),   # +z overhead softbox
         face((0.005, 0.005, 0.008)),                           # -z floor
     ]
