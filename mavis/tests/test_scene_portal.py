@@ -94,3 +94,21 @@ def test_every_wall_faces_into_the_room(avatar):
         normal = render.get_relative_vector(card, (0, -1, 0))
         to_centre = centre - card.get_pos(render)
         assert normal.dot(to_centre) > 0, f"{name} wall faces out of the room"
+
+
+def test_film_finish_sits_over_the_scene_but_under_the_text(avatar):
+    """Vignette and grain must never dim the captions or the credit."""
+    assert avatar.film is not None
+    assert avatar.film.root.get_bin_name() == "background"
+    assert avatar.film.root.get_parent() == avatar.base.render2d
+    from panda3d.core import TextureStage
+    stage_ = TextureStage.get_default()
+    before = avatar.film.grain.get_tex_offset(stage_)
+    avatar.film.step()
+    assert avatar.film.grain.get_tex_offset(stage_) != before, "grain must move"
+
+
+def test_hud_is_pinned_to_the_top_left_of_the_glass(avatar):
+    avatar.show_hud("JOHNNY // LOCKED")
+    assert avatar._hud.getText() == "JOHNNY // LOCKED"
+    assert avatar._hud.get_parent() == avatar.base.a2dTopLeft

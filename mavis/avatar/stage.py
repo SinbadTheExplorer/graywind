@@ -1,54 +1,73 @@
-"""The room behind the glass in portal mode: walls, grid, lights, shadow.
+"""The set behind the glass in portal mode: room, lights, shadow, film look.
 
 Why a room at all: off-axis projection on an EMPTY background moves nothing
 you can see -- the eye reads depth from things at different distances sliding
-past each other. The walls flush with the screen's edges are what you watch
-open up as you lean, and his shadow on the back wall is the single strongest
-"he is physically in there" cue (it is the "virtual shadow" half of the
-reel). Everything here is geometry built in code: no new asset to license.
+past each other. His shadow on the back wall is the single strongest "he is
+physically in there" cue (the "virtual shadow" half of the reel). Everything
+here is built in code: no new asset to license.
+
+The LOOK is matched to the reference reel (@ojrgb, TouchDesigner), not to a
+demo. A first pass used a bright grid box -- the classic head-tracking demo
+look -- and read as a tech demo next to the reel. What the reel actually
+does, and this copies:
+  * low-key light: one hard key from above, everything else falling to near
+    black, so the subject is carved out by highlights rather than lit evenly;
+  * a dim, cool, textured back wall (grimy concrete, not a pattern) that is
+    barely there except where the key spills onto it -- which is exactly
+    where the shadow lands;
+  * a coloured rim from behind (the reel's red) separating him from the wall;
+  * a camera-like finish: vignette and moving film grain over the frame.
 
 Layout, in the portal frame (metres, screen at y=0, see `portal`):
   * the room is LARGER than the window -- you look through the glass into a
     room, not into a screen-sized box. A box flush with the screen's edges
-    was tried first and fails: he stands 30cm back, where the window shows
-    half again its own height, so anything framed to fill it is taller than
-    the box and the ceiling sliced through his head. Sized instead to what
-    the window reveals at his depth, the walls sit just outside the frame
-    from the centre and swing into view as you lean;
-  * the floor is at his feet: he is framed from the belt up, so it is out of
-    sight unless you crouch and look down into the room.
+    was tried first and fails: the window reveals more than its own height
+    at his depth, so anything framed to fill it was taller than the box and
+    the ceiling sliced through his head;
+  * the floor is at his feet, out of sight unless you crouch.
 """
-from panda3d.core import (AmbientLight, BitMask32, CardMaker, NodePath, PNMImage,
-                          PointLight, SamplerState, Spotlight, Texture,
-                          TransparencyAttrib, Vec4)
+import random
 
-# How far the back wall sits behind his head.
-BACK_GAP = 0.32
-# One grid cell, metres. Roughly a tile's worth of visual frequency at a
-# laptop's distance: dense enough to read as a surface, sparse enough that
-# the lines slide visibly when you move.
-GRID_CELL = 0.04
-# Bright enough that the key light makes a visible pool on the back wall --
-# his shadow is only legible as a hole in that pool. Near-black walls (the
-# first try) swallowed it completely.
-WALL_RGB = (0.12, 0.12, 0.145)
-LINE_RGB = (0.55, 0.06, 0.08)       # the reel's red, dimmed: neon behind glass
-# Camera-mask bit the key light's shadow camera draws. Anything hidden from it
-# casts no shadow. The glass edge needs that: it sits in front of the room,
-# between the key light and the walls, and threw a thin dark line across the
-# left wall that read as a rendering glitch.
-SHADOW_BIT = BitMask32.bit(5)
+from panda3d.core import (AmbientLight, CardMaker, NodePath, PerlinNoise2,
+                          PNMImage, PointLight, SamplerState, Spotlight,
+                          Texture, TextureStage, TransparencyAttrib, Vec4)
+
+# How far the back wall sits behind his head. Close, as in the reel: the
+# shadow stays near him and big, instead of a small far-off silhouette.
+BACK_GAP = 0.20
+# One repeat of the concrete texture, metres.
+TILE = 0.75
+# Concrete: dark blue-grey, the reel's wall. Values are albedo, before light.
+CONCRETE_RGB = (0.065, 0.08, 0.12)
+RIM_RGB = (1.6, 0.10, 0.07)          # the reel's red
+COOL_RIM_RGB = (0.25, 0.35, 0.6)
 
 
-def _grid_texture(size: int = 256, line_px: int = 3) -> Texture:
+def _concrete_texture(size: int = 512, seed: int = 7) -> Texture:
+    """Tileable-enough grimy concrete from layered Perlin noise and pits."""
     img = PNMImage(size, size, 3)
-    img.fill(*WALL_RGB)
-    for i in range(size):
-        for j in range(line_px):
-            img.set_xel(i, j, *LINE_RGB)
-            img.set_xel(j, i, *LINE_RGB)
-    tex = Texture("mavis-grid")
+    octaves = [PerlinNoise2(scale, scale, 256, seed + i)
+               for i, scale in enumerate((96.0, 32.0, 9.0, 3.0))]
+    weights = (0.45, 0.30, 0.17, 0.08)
+    rng = random.Random(seed)
+    base_r, base_g, base_b = CONCRETE_RGB
+    for x in range(size):
+        for y in range(size):
+            n = sum(w * o.noise(x, y) for w, o in zip(weights, octaves))
+            v = max(0.0, min(1.5, 1.0 + 0.9 * n))
+            img.set_xel(x, y, base_r * v, base_g * v, base_b * v)
+    # Pits and stains: the speckle that makes a surface read as a surface
+    # rather than as a smooth gradient.
+    for _ in range(size * 6):
+        x, y = rng.randrange(size), rng.randrange(size)
+        k = rng.uniform(0.25, 0.7)
+        r, g, b = img.get_xel(x, y)
+        img.set_xel(x, y, r * k, g * k, b * k)
+    tex = Texture("mavis-concrete")
     tex.load(img)
+    # Repeat, not mirror: mirroring hides the seam but folds the noise into a
+    # Rorschach blot that the eye finds instantly. At TILE metres a repeat is
+    # wider than the window, so the seam is rarely in view at all.
     tex.set_wrap_u(SamplerState.WM_repeat)
     tex.set_wrap_v(SamplerState.WM_repeat)
     tex.set_minfilter(SamplerState.FT_linear_mipmap_linear)
@@ -60,7 +79,7 @@ def _card(parent, name, width, height, tex):
     cm = CardMaker(name)
     cm.set_frame(-width / 2.0, width / 2.0, -height / 2.0, height / 2.0)
     cm.set_has_normals(True)
-    cm.set_uv_range((0, 0), (width / GRID_CELL, height / GRID_CELL))
+    cm.set_uv_range((0, 0), (width / TILE, height / TILE))
     node = parent.attach_new_node(cm.generate())
     node.set_texture(tex)
     node.set_two_sided(False)
@@ -72,11 +91,10 @@ def build_room(render, screen, width: float, top: float, depth: float,
     """Build the room behind the screen.
 
     `width` and `top` give the room's cross-section (centred on x, from
-    `floor_z` up to `top`); `depth` is the back wall's y. The bright edge
-    marking the glass always follows the SCREEN, not the room.
+    `floor_z` up to `top`); `depth` is the back wall's y.
     """
     room = render.attach_new_node("mavis-room")
-    tex = _grid_texture()
+    tex = _concrete_texture()
     w = width
     height = top - floor_z
     mid_z = (top + floor_z) / 2.0
@@ -100,70 +118,131 @@ def build_room(render, screen, width: float, top: float, depth: float,
     floor = _card(room, "floor", w, depth, tex)
     floor.set_hpr(0, -90, 0)                # face +z
     floor.set_pos(0, depth / 2.0, floor_z)
-
-    # A thin bright edge where the walls meet the glass. The reel's monitor
-    # bezel does this job for free; a laptop's black bezel does not, and
-    # without it the room's mouth vanishes into the bezel.
-    edge = _frame_lines(room, screen.width, screen.height)
-    edge.set_transparency(TransparencyAttrib.M_alpha)
     return room
 
 
-def _frame_lines(parent, w, h, thickness=0.0015):
-    frame = parent.attach_new_node("mouth")
-    cm = CardMaker("mouth-edge")
-    for name, (x0, x1, z0, z1) in {
-        "top": (-w / 2, w / 2, h / 2 - thickness, h / 2),
-        "bottom": (-w / 2, w / 2, -h / 2, -h / 2 + thickness),
-        "left": (-w / 2, -w / 2 + thickness, -h / 2, h / 2),
-        "right": (w / 2 - thickness, w / 2, -h / 2, h / 2),
-    }.items():
-        cm.set_frame(x0, x1, z0, z1)
-        card = frame.attach_new_node(cm.generate())
-        card.set_name(name)
-        card.set_y(0.002)
-        card.set_color(LINE_RGB[0], LINE_RGB[1], LINE_RGB[2], 0.9)
-    frame.set_light_off(1)
-    frame.hide(SHADOW_BIT)
-    return frame
-
-
 def light_room(render, target: NodePath, screen, depth: float):
-    """Key spot that throws his shadow on the back wall, red rim, low fill.
+    """Low-key rig: hard top key with his shadow, red rim, cool kicker, no fill.
 
     Returns the lights' NodePaths so a caller can tear them down. The key is
-    a Spotlight, not a DirectionalLight: its shadow frustum is a cone that
-    naturally fits a small room, where a directional light's orthographic
-    shadow camera has to be sized by hand and silently crops the shadow when
-    it is not.
+    a Spotlight, not a DirectionalLight: its cone gives a pool of light that
+    falls off into darkness (the low-key look needs that falloff), and its
+    shadow frustum naturally fits a small room, where a directional light's
+    orthographic shadow camera must be sized by hand and silently crops.
     """
     lights = []
+    head = target.get_pos(render)
 
     key = Spotlight("portal-key")
-    key.set_color(Vec4(2.4, 2.2, 2.0, 1))
+    key.set_color(Vec4(3.6, 3.5, 3.4, 1))
     key.set_shadow_caster(True, 2048, 2048)
-    key.set_camera_mask(SHADOW_BIT)
+    # Wide enough that the cone's EDGE never shows. simplepbr ignores the
+    # spot exponent and cuts the cone off hard, so a tight cone drew a crisp
+    # stage-spotlight disc on the back wall. The falloff to dark corners
+    # comes from the vignette in FilmFinish instead.
     key.get_lens().set_fov(80)
     key.get_lens().set_near_far(0.05, depth + 2.0)
     key_np = render.attach_new_node(key)
-    # Up and to the right of the viewer, in front of the glass: the shadow
-    # falls down and to his left on the back wall, where it is in view.
-    key_np.set_pos(screen.width * 0.9, -0.35, screen.height * 1.1)
-    key_np.look_at(target)
+    # High and a little to the viewer's right, in front of the glass: the
+    # shadow drops onto the back wall below and to his left, in view, and
+    # the brow, nose and shoulders catch top light as in the reel.
+    key_np.set_pos(head[0] + screen.width * 0.55, -0.30, head[2] + screen.height * 1.5)
+    key_np.look_at(head[0], head[1], head[2] - 0.03)
     render.set_light(key_np)
     lights.append(key_np)
 
+    # Rims sit BEHIND him, near the wall, so they light his edges and not his
+    # front; quadratic falloff keeps them off the wall's far corners.
     rim = PointLight("portal-rim")
-    rim.set_color(Vec4(0.9, 0.08, 0.1, 1))
-    rim.set_attenuation((1, 0, 6))
+    rim.set_color(Vec4(*RIM_RGB, 1))
+    rim.set_attenuation((1, 0, 30))
     rim_np = render.attach_new_node(rim)
-    rim_np.set_pos(-screen.width * 0.42, depth * 0.85, screen.height * 0.35)
+    rim_np.set_pos(head[0] - screen.width * 0.35, head[1] + 0.12, head[2] + 0.02)
     render.set_light(rim_np)
     lights.append(rim_np)
 
+    kicker = PointLight("portal-kicker")
+    kicker.set_color(Vec4(*COOL_RIM_RGB, 1))
+    kicker.set_attenuation((1, 0, 30))
+    kicker_np = render.attach_new_node(kicker)
+    kicker_np.set_pos(head[0] + screen.width * 0.38, head[1] + 0.10, head[2] + 0.06)
+    render.set_light(kicker_np)
+    lights.append(kicker_np)
+
+    # Not zero: PBR with no ambient renders unlit faces pure black, which
+    # reads as clipped rather than as shadow.
     fill = AmbientLight("portal-fill")
-    fill.set_color(Vec4(0.10, 0.10, 0.13, 1))
+    fill.set_color(Vec4(0.035, 0.04, 0.06, 1))
     fill_np = render.attach_new_node(fill)
     render.set_light(fill_np)
     lights.append(fill_np)
     return lights
+
+
+class FilmFinish:
+    """Vignette + moving grain over the frame, the reel's camera finish.
+
+    Drawn as two cards in render2d's BACKGROUND bin, so they sit over the 3D
+    image but under the captions and credit -- text stays crisp. No shader:
+    simplepbr owns the post-process chain and a second filter would fight it.
+    """
+
+    GRAIN_ALPHA = 0.07
+    VIGNETTE_ALPHA = 0.92
+
+    def __init__(self, render2d, seed: int = 11):
+        self._rng = random.Random(seed)
+        self.root = render2d.attach_new_node("mavis-film")
+        self.root.set_bin("background", 10)
+        self.root.set_depth_write(False)
+        self.root.set_depth_test(False)
+        self.root.set_light_off(1)
+        self.root.set_transparency(TransparencyAttrib.M_alpha)
+
+        self.vignette = self._fullscreen("vignette", self._vignette_texture())
+        self.vignette.set_bin("background", 11)
+        self.grain = self._fullscreen("grain", self._grain_texture(), repeat=3.0)
+        self.grain.set_bin("background", 12)
+
+    def _fullscreen(self, name, tex, repeat=1.0):
+        cm = CardMaker(name)
+        cm.set_frame(-1, 1, -1, 1)
+        cm.set_uv_range((0, 0), (repeat, repeat))
+        card = self.root.attach_new_node(cm.generate())
+        card.set_texture(tex)
+        return card
+
+    def _vignette_texture(self, size=256):
+        img = PNMImage(size, size, 4)
+        for x in range(size):
+            for y in range(size):
+                dx = (x / (size - 1)) * 2 - 1
+                dy = (y / (size - 1)) * 2 - 1
+                r = min(1.0, (dx * dx + dy * dy) ** 0.5 / 1.414)
+                # Clear centre, smooth roll-off into the corners.
+                a = max(0.0, (r - 0.25) / 0.75)
+                a = a * a * (3 - 2 * a) * self.VIGNETTE_ALPHA
+                img.set_xel_a(x, y, 0, 0, 0, a)
+        tex = Texture("mavis-vignette")
+        tex.load(img)
+        tex.set_wrap_u(SamplerState.WM_clamp)
+        tex.set_wrap_v(SamplerState.WM_clamp)
+        return tex
+
+    def _grain_texture(self, size=256):
+        img = PNMImage(size, size, 4)
+        for x in range(size):
+            for y in range(size):
+                v = self._rng.random()
+                img.set_xel_a(x, y, v, v, v, self.GRAIN_ALPHA)
+        tex = Texture("mavis-grain")
+        tex.load(img)
+        tex.set_wrap_u(SamplerState.WM_repeat)
+        tex.set_wrap_v(SamplerState.WM_repeat)
+        tex.set_magfilter(SamplerState.FT_nearest)
+        return tex
+
+    def step(self) -> None:
+        """Jump the grain every frame. Static grain reads as a dirty screen."""
+        self.grain.set_tex_offset(TextureStage.get_default(),
+                                  self._rng.random(), self._rng.random())

@@ -53,6 +53,8 @@ def main() -> int:
     tiles = []
     for name, eye in EYES.items():
         sc.look_from(eye)
+        sc.show_hud(f"JOHNNY // LOCKED   eye {-eye[1]:.2f}m   "
+                    f"x{eye[0]:+.2f} z{eye[2]:+.2f}   cam 30fps")
         for _ in range(3):
             base.taskMgr.step()
         img = PNMImage()

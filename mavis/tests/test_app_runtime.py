@@ -96,6 +96,9 @@ class PortalScene(CaptionScene):
     def show_notice(self, text):
         self.notices.append(text)
 
+    def show_hud(self, text):
+        pass
+
 
 class StubTracker:
     def __init__(self, reading=(None, None), error=None):
@@ -145,3 +148,18 @@ def test_portal_requested_reads_the_env():
     assert app_mod.portal_requested({"MAVIS_PORTAL": "1"})
     assert not app_mod.portal_requested({"MAVIS_PORTAL": "0"})
     assert not app_mod.portal_requested({})
+
+
+def test_hud_reports_what_the_tracker_sees():
+    scene = PortalScene()
+    scene.huds = []
+    scene.show_hud = scene.huds.append      # instance attr shadows the stub
+    tracker = StubTracker(((0.1, -0.5, 0.02), 1.0))
+    tracker.fps = 29.6
+    rt = app_mod.Runtime(StubBase(), scene, machine=object(), tracker=tracker)
+    rt._follow_eye()
+    assert scene.huds[-1].startswith("JOHNNY // LOCKED")
+    assert "eye 0.50m" in scene.huds[-1] and "cam 30fps" in scene.huds[-1]
+    assert "SEARCHING" in rt.hud_text(None, (0, -0.6, 0))
+    rt._tracking = False
+    assert "PAUSED" in rt.hud_text(None, (0, -0.6, 0))

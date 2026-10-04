@@ -80,6 +80,7 @@ class Runtime:
         self._eye_stamp = None
         self._tracking = True
         self._tracker_error_shown = False
+        self._hud_at = 0.0
         self._inbox = queue.Queue()
         self._manual_wake = threading.Event()
         self._stopping = threading.Event()
@@ -138,6 +139,23 @@ class Runtime:
         else:
             view = self._smoother.update(None, now)
         self.scene.look_from(view)
+        if now - self._hud_at >= 0.25:
+            self._hud_at = now
+            self.scene.show_hud(self.hud_text(eye, view))
+
+    def hud_text(self, eye, view) -> str:
+        """JOHNNY // LOCKED  eye 0.61m  x+0.04  cam 30fps -- or why not."""
+        if not self._tracking:
+            state = "PAUSED"
+        elif self.tracker is None or getattr(self.tracker, "error", None):
+            state = "NO CAMERA"
+        elif eye is None:
+            state = "SEARCHING"
+        else:
+            state = "LOCKED"
+        fps = getattr(self.tracker, "fps", 0.0) if self.tracker else 0.0
+        return (f"JOHNNY // {state}   eye {-view[1]:.2f}m   "
+                f"x{view[0]:+.2f} z{view[2]:+.2f}   cam {fps:.0f}fps")
 
     def _toggle_tracking(self) -> None:
         self._tracking = not self._tracking

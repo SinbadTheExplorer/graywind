@@ -157,7 +157,17 @@ DEFAULT_FOV = 30.0
 # Portal mode: how far behind the glass his head sits, metres. Deep enough
 # that leaning visibly uncovers the side walls, shallow enough that the head
 # still fills the window from a normal sitting distance.
-PORTAL_DEPTH = 0.30
+PORTAL_DEPTH = 0.18
+# Head heights the window spans from the nominal eye. Tighter than the
+# overlay's torso portrait (FRAMING): the reel's subject is big and close,
+# cropped by the screen's edges, and a large subject near the glass is what
+# makes the window read as a window rather than a diorama.
+PORTAL_FRAMING = 2.1
+# HEAD_RISE's portal counterpart. At this tighter framing the overlay's 0.31
+# pushes the crown off the top edge, and 0.24 still clipped it by 1.3mm
+# (test_head_is_visible_through_the_window_from_the_nominal_eye); this leaves
+# a sliver of wall above him.
+PORTAL_RISE = 0.21
 
 
 def choose_avatar() -> str:
@@ -329,6 +339,7 @@ class AvatarScene:
         self.portal = portal
         self.room = None
         self.pivot = None
+        self.film = None
         self.gaze = 0.0
 
         self._init_shader()
@@ -387,6 +398,7 @@ class AvatarScene:
         else:
             self.lights = stage.light_room(self.base.render, self.pivot,
                                            portal, self.room_depth)
+            self.film = stage.FilmFinish(self.base.render2d)
             self.look_from(portal.nominal_eye)
         # mayChange=True keeps a live TextNode. The default flattens the text
         # into a bare PandaNode, after which the credit can no longer be read
@@ -438,7 +450,10 @@ class AvatarScene:
 
         # Shadows only behind the glass: the overlay has nothing to cast onto,
         # and the shadow pass is a second render of the whole model.
-        self.pipeline = simplepbr.init(msaa_samples=0,
+        # MSAA only behind the glass: a full-screen window makes jagged
+        # silhouette edges against the dark wall the first thing you notice,
+        # where the small overlay window never showed them.
+        self.pipeline = simplepbr.init(msaa_samples=4 if self.portal is not None else 0,
                                        enable_shadows=self.portal is not None)
         self.base._mavis_pbr_pipeline = self.pipeline
 
@@ -519,10 +534,10 @@ class AvatarScene:
 
         eye_distance = -screen.nominal_eye[1]
         visible = screen.height * (eye_distance + PORTAL_DEPTH) / eye_distance
-        scale = visible / (head_height * FRAMING)
+        scale = visible / (head_height * PORTAL_FRAMING)
 
         self.pivot = self.base.render.attach_new_node("mavis-pivot")
-        self.pivot.set_pos(0, PORTAL_DEPTH, visible * HEAD_RISE)
+        self.pivot.set_pos(0, PORTAL_DEPTH, visible * PORTAL_RISE)
         self.actor.reparent_to(self.pivot)
         self.actor.set_scale(scale)
         self.actor.set_pos(-center_x * scale, -center_y * scale, -center_z * scale)
@@ -587,6 +602,8 @@ class AvatarScene:
             # head that turns at camera rate still reads as mechanical.
             current = self.pivot.get_h()
             self.pivot.set_h(current + (self.gaze - current) * 0.08)
+        if self.film is not None:
+            self.film.step()
 
     def play(self, name: str, loop: bool = True) -> bool:
         """Switch to another clip, e.g. "smoking". False if it has none.
@@ -746,6 +763,24 @@ class AvatarScene:
                 text="", pos=(0.0, 0.88), scale=0.05,
                 fg=(1.0, 0.6, 0.3, 1.0), align=TextNode.ACenter, mayChange=True)
         self._notice.setText(text)
+
+    def show_hud(self, text: str) -> None:
+        """A dim status line pinned to the glass, top-left. "" clears.
+
+        Portal mode only, and not decoration: the reel's flat UI sitting ON
+        the screen plane is half of why the scene behind it reads as deep --
+        it gives the eye a fixed surface to measure the room against. It also
+        reports what the tracker sees, which is how the screen size and
+        webcam field of view get calibrated by eye.
+        """
+        if getattr(self, "_hud", None) is None:
+            # Anchored to the window's top-left corner, so it stays in the
+            # corner whatever the display's aspect ratio.
+            self._hud = OnscreenText(
+                text="", parent=self.base.a2dTopLeft, pos=(0.05, -0.08),
+                scale=0.032, fg=(0.85, 0.22, 0.2, 0.75), align=TextNode.ALeft,
+                mayChange=True)
+        self._hud.setText(text)
 
     def show_caption(self, text: str) -> None:
         """His answer, rendered so it reads with the sound off. "" clears.

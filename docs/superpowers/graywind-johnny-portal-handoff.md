@@ -71,7 +71,7 @@ echo 'MAVIS_SCREEN_CM=30.2x19.6' >> ~/.mavis/env         # MEASURE YOURS, see be
 - `requirements.txt` — `opencv-python-headless==5.0.0.93` (cp37-abi3 wheel;
   verified a `macosx_13_0_arm64` wheel exists for Python 3.14).
 
-**Tests:** `cd mavis && .venv/bin/python -m pytest -q` → **217 passed** in the
+**Tests:** `cd mavis && .venv/bin/python -m pytest -q` → **220 passed** after the look pass (217 before it) in the
 Linux cloud box (was 179 there; 38 new). The 6 that fail there are
 environment-only and failed before this work: `say` is macOS-only, and five
 need the gitignored `keanu.bam`. Expect the full count on the Mac.
@@ -91,6 +91,38 @@ timing, the re-acquire reseed and a wall's facing each fails a test.
   `stage.SHADOW_BIT`.
 - **MediaPipe** was rejected up front: its wheels trail new Python releases and
   the avatar runs on Homebrew's Python 3.14.
+
+## Look pass (2026-10-04, second commit) — matched to the reel
+
+The owner asked for the reel's quality. Frame-by-frame, the reel (a
+TouchDesigner project) differs from v1 in LOOK, not tracking, so this pass
+changed only the set:
+
+| Reel | v1 | Now |
+|---|---|---|
+| Low-key: hard top light, metal highlights, black corners | Flat, evenly lit | Hard top Spotlight + red rim + cool kicker, near-zero fill |
+| Dim navy concrete wall | Bright pink grid box | Procedural Perlin concrete, navy, no visible pattern |
+| Subject big, close, cropped by the screen | Small torso, 30cm back | `PORTAL_FRAMING` 2.1 head heights, `PORTAL_DEPTH` 0.18m |
+| Grain, vignette | Clean CG | `stage.FilmFinish`: vignette + per-frame grain, under the text |
+| Flat UI on the glass (depth reference) | None | `show_hud`: `JOHNNY // LOCKED  eye 0.61m ...` top-left |
+
+Also MSAA x4 in portal mode only. Tried and rejected during this pass:
+- **simplepbr fog** — it is exponential in distance from the CAMERA, and
+  everything is 0.7-1.0m away, so it dims the frame uniformly instead of
+  separating depths.
+- **A tight key cone** — simplepbr ignores the spot exponent and cuts the
+  cone off hard: a crisp stage-spotlight disc on the wall. The cone is now
+  wide (edge off-screen) and the falloff comes from the vignette.
+- **Mirror-wrapped concrete** — hides the seam but folds the noise into an
+  obvious Rorschach blot. Repeat-wrapped at 0.75m tiles instead.
+- **`PORTAL_RISE` 0.24** clipped his crown by 1.3mm; now 0.21 (pinned by
+  `test_head_is_visible_through_the_window_from_the_nominal_eye`).
+
+**The biggest remaining gap is the asset, not the code.** The reel's mech is a
+high-end hard-surface model with metal PBR materials; `jonny` (the only model
+in the cloud box) is a Ready Player Me export in a T-pose. The owner's local
+`keanu` model is much closer — every look decision above should be re-judged
+on it, on the Mac.
 
 ## UNVERIFIED (needs the owner, on the Mac)
 
