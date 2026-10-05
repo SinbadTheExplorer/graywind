@@ -480,6 +480,14 @@ def main() -> int:
     from avatar import headtrack
 
     screen = portal.screen_from_env() if portal_requested() else None
+    if screen is not None:
+        # Draw at the panel's real pixels. Without it Panda3D renders a Retina
+        # screen at half resolution and macOS stretches the frame 2x -- the
+        # soft image the owner compared against the source model. Needs
+        # Panda3D 1.11 (1.10 ignores it on macOS). Portal only: the overlay's
+        # window sizes are in points and it was never judged for sharpness.
+        from panda3d.core import loadPrcFileData
+        loadPrcFileData("mavis-portal", "dpi-aware #t")
     base = ShowBase()
     chrome = WindowProperties()
     if screen is None:

@@ -816,7 +816,7 @@ class AvatarScene:
         # where the small overlay window never showed them.
         # The grade goes in AT init: setting sdr_lut later makes simplepbr
         # rebuild its whole post chain, orphaning the glow stages.
-        self.pipeline = simplepbr.init(msaa_samples=4 if self.portal is not None else 0,
+        self.pipeline = simplepbr.init(msaa_samples=self._portal_msaa(),
                                        enable_shadows=self.portal is not None,
                                        sdr_lut=(look.grade_lut()
                                                 if self.portal is not None else None))
@@ -835,6 +835,20 @@ class AvatarScene:
                 print(f"glow unavailable: {exc}")
                 self.bloom = None
             self.base._mavis_bloom = self.bloom
+
+    def _portal_msaa(self) -> int:
+        """Edge smoothing behind the glass: 4x, except at Retina density.
+
+        Drawing a Retina panel's real pixels (dpi-aware) already halves the
+        stair-steps; 4x MSAA on top cost the 8GB M2 a quarter of its frame
+        rate (measured live: 45.6fps at 4x, 59.3 at none, 2940x1912).
+        """
+        if self.portal is None:
+            return 0
+        from panda3d.core import ConfigVariableBool
+        retina = (ConfigVariableBool("dpi-aware", False).get_value()
+                  and self.base.pipe.get_display_zoom() >= 1.5)
+        return 0 if retina else 4
 
     def _release_camera(self):
         """Take the camera away from ShowBase's default mouse trackball.
