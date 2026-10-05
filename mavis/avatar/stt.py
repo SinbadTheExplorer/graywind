@@ -8,10 +8,28 @@ import numpy as np
 
 GROQ_STT_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_STT_MODEL = "whisper-large-v3-turbo"
+# Whisper spells unfamiliar names by ear, and a misspelt name misses the
+# grounding lookup entirely: "Graywind" heard as "Greywind" got "I don't have
+# that information" for the watchlist that was sitting in the corpus
+# (2026-10-01). The prompt is Whisper's vocabulary hint, not an instruction.
+GROQ_STT_PROMPT = ("Johnny, Graywind, watchlist, macro gate, VIX gate, tier pools, "
+                   "drawdown breaker, deflated Sharpe, Bullion, the Fed, choom.")
 
 
 class STTError(RuntimeError):
     pass
+
+
+_client = None
+
+
+def _shared_client() -> httpx.AsyncClient:
+    """One client for the session. A new one per question paid a fresh TLS
+    handshake with Groq every time, inside time-to-first-word."""
+    global _client
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient(timeout=30.0)
+    return _client
 
 
 def _to_wav_bytes(samples: np.ndarray, sample_rate: int) -> bytes:
@@ -34,22 +52,17 @@ async def transcribe(samples: np.ndarray, sample_rate: int = 16000,
     if samples.size == 0:
         return ""
 
-    owns_client = client is None
-    if owns_client:
-        client = httpx.AsyncClient(timeout=30.0)
+    client = client or _shared_client()
     try:
         resp = await client.post(
             GROQ_STT_URL,
             headers={"Authorization": f"Bearer {api_key}"},
             files={"file": ("utterance.wav", _to_wav_bytes(samples, sample_rate),
                             "audio/wav")},
-            data={"model": GROQ_STT_MODEL},
+            data={"model": GROQ_STT_MODEL, "prompt": GROQ_STT_PROMPT},
         )
     except httpx.RequestError as exc:
         raise STTError(f"speech-to-text unreachable: {exc}") from exc
-    finally:
-        if owns_client:
-            await client.aclose()
 
     if resp.status_code != 200:
         raise STTError(f"speech-to-text failed ({resp.status_code})")

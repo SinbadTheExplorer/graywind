@@ -13,3 +13,8 @@ panda3d-simplepbr==0.13.1
 openwakeword==0.6.0
 sounddevice==0.5.3
 numpy==2.5.3
+# The voice he answers in (avatar/tts.py). Its model files are NOT in the
+# repo: kokoro-v1.0.onnx and voices-v1.0.bin from the kokoro-onnx GitHub
+# release "model-files-v1.0", plus silero_vad.onnx from openWakeWord's
+# v0.5.1 release (avatar/capture.py), all in ~/.mavis/models/.
+kokoro-onnx==0.4.7

@@ -1,9 +1,8 @@
 """Resolves a moment to a pre-generated Johnny wav.
 
 Everything here degrades rather than raises. The audio is a gitignored build
-artifact produced by a 47-minute offline job, so a fresh clone has none of it
-and an interrupted run has some of it -- neither may stop the avatar from
-appearing. A moment with no usable audio simply passes over in silence, and
+artifact of `scripts/pregen_lines.py`, so a fresh clone has none of it and an
+interrupted run has some of it -- neither may stop the avatar from appearing. A moment with no usable audio simply passes over in silence, and
 `missing` names what is absent so the caller can say so on screen.
 
 An entry is only usable when its recorded hash still matches the catalogue's
@@ -17,6 +16,16 @@ from avatar import lines
 
 ASSET_DIR = Path(__file__).resolve().parent.parent / "assets" / "voice"
 MANIFEST_NAME = "manifest.json"
+
+
+def asset_dir(voice_name: str) -> Path:
+    """Where the canned lines rendered in `voice_name` live.
+
+    One directory per voice, so the greeting and the live answer are the same
+    voice. `assets/voice` itself still holds the set cloned with ChatterboxTTS
+    before 2026-10-01; nothing reads it now and nothing overwrites it.
+    """
+    return ASSET_DIR.with_name(f"voice-{voice_name}")
 
 
 class CannedVoice:

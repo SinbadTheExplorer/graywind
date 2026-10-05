@@ -152,3 +152,120 @@ def test_a_general_question_still_gets_a_general_answer(client, monkeypatch):
     assert resp.status_code == 200
     assert resp.json()["answer"] == "Gold is a store of value."
 
+
+
+# -- /ask/stream: the spoken path ---------------------------------------------
+
+import json  # noqa: E402
+
+import news  # noqa: E402
+from providers import ProviderError  # noqa: E402
+
+
+def _lines(resp):
+    return [json.loads(line) for line in resp.text.splitlines() if line.strip()]
+
+
+def _spoken(client, query):
+    resp = client.post("/ask/stream", json={"query": query, "max_chars": 200},
+                       headers={"X-API-Key": "secret123"})
+    assert resp.status_code == 200
+    return _lines(resp)
+
+
+def _fake_stream(seen, *fragments, fail=None):
+    async def fake(query, context=None, max_chars=None, instruction=None):
+        seen.update(query=query, context=context, max_chars=max_chars,
+                    instruction=instruction)
+        for fragment in fragments:
+            yield fragment
+        if fail:
+            raise fail
+    return fake
+
+
+def test_stream_without_api_key_is_rejected(client):
+    assert client.post("/ask/stream", json={"query": "hi"}).status_code == 401
+
+
+def test_stream_sends_the_answer_in_fragments_then_a_done_line(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(app_module, "groq_stream", _fake_stream(seen, "Gold ", "bids."))
+
+    lines = _spoken(client, "what is the capital of France")
+
+    assert lines[:2] == [{"delta": "Gold "}, {"delta": "bids."}]
+    assert lines[2]["done"] is True and lines[2]["grounded"] is False
+    assert seen["max_chars"] == 200 and seen["instruction"] is None
+
+
+def test_stream_refuses_ungrounded_questions_about_our_own_system(client, monkeypatch):
+    async def explode(*a, **kw):
+        raise AssertionError("the model must not be asked at all")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(app_module, "groq_stream", explode)
+
+    lines = _spoken(client, "what is the macro gate")
+
+    assert "guessing" in lines[0]["delta"]
+    assert lines[1] == {"done": True, "citations": [], "grounded": False}
+
+
+def test_a_provider_failure_arrives_as_an_error_line(client, monkeypatch):
+    monkeypatch.setattr(app_module, "groq_stream",
+                        _fake_stream({}, "Half an ", fail=ProviderError("Groq error 503")))
+
+    lines = _spoken(client, "what is the capital of France")
+
+    assert lines == [{"delta": "Half an "}, {"error": "Groq error 503"}]
+
+
+def test_news_is_answered_from_headlines_fetched_now(client, monkeypatch):
+    seen = {}
+    items = [{"type": "news", "title": "Bond yields hit a 24-year high",
+              "source": "Reuters", "published": None, "link": "https://example.com/1"}]
+
+    async def fake_headlines(query):
+        return items
+
+    monkeypatch.setattr(news, "headlines", fake_headlines)
+    monkeypatch.setattr(app_module, "groq_stream", _fake_stream(seen, "Yields up, says Reuters."))
+
+    lines = _spoken(client, "what's the news")
+
+    # He starts talking before the feed is fetched.
+    assert lines[0]["delta"].strip() in news.OPENERS
+    assert lines[1] == {"delta": "Yields up, says Reuters."}
+    assert "Reuters" in seen["context"] and "24-year high" in seen["context"]
+    assert seen["instruction"] == news.INSTRUCTION
+    assert seen["max_chars"] == news.NEWS_MAX_CHARS       # not the caller's 200
+    assert lines[-1] == {"done": True, "citations": items, "grounded": True}
+
+
+def test_news_with_no_feed_says_so_instead_of_reciting_from_memory(client, monkeypatch):
+    async def no_headlines(query):
+        return []
+
+    async def explode(*a, **kw):
+        raise AssertionError("no headlines means the model is not asked")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(news, "headlines", no_headlines)
+    monkeypatch.setattr(app_module, "groq_stream", explode)
+
+    lines = _spoken(client, "what's the news")
+
+    assert lines[1]["delta"] == news.UNAVAILABLE
+    assert lines[2]["grounded"] is False
+
+
+def test_the_news_debate_gate_is_a_project_question_not_a_news_request(client, monkeypatch):
+    async def explode(query):
+        raise AssertionError("must not fetch headlines for a Graywind term")
+
+    monkeypatch.setattr(news, "headlines", explode)
+
+    lines = _spoken(client, "how does the news debate work")
+
+    assert "guessing" in lines[0]["delta"]

@@ -1,14 +1,11 @@
 """The canned Johnny line catalogue.
 
-These are the lines pre-generated in his real voice with ChatterboxTTS, for the
-moments that repeat: greeting, idle, dismissal, and the filler that covers the
-wait while a real answer is converted. Substantive answers do not live here --
-they are generated live and converted by `voice_client`.
+These are the lines pre-rendered for the moments that repeat: greeting, idle,
+dismissal, and the filler that covers a slow answer. Substantive answers do
+not live here -- they are written live and spoken by `avatar.tts`.
 
-**Pure stdlib on purpose.** This module is imported by both interpreters: the
-3.14 runtime and the 3.12 generator that needs torch. Any import beyond the
-standard library breaks the generator, and the breakage looks like a missing
-catalogue rather than an import error.
+Pure stdlib: it is only a catalogue, imported by the runtime and by
+`scripts/pregen_lines.py`.
 
 Written with the `johnny-persona` skill: cynical about institutions and never
 about the listener, tech-noir imagery rather than bro slang, "choom" five times

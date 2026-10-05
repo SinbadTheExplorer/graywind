@@ -1,103 +1,152 @@
-"""Criterion 2 timing through the real Runtime._voice path (no mic, no speaker).
+"""Criterion 1 timing through the real Runtime path (no mic, no speaker).
 
-Run from mavis/ with the backend up and the avatar STOPPED (two voice workers
-would fight over the GPU and memory):
-    launchctl bootout gui/$UID/com.mavis.avatar   # or just press Escape in his window
+Run from mavis/ with the backend up. The avatar may stay running: there is no
+GPU worker to fight over any more.
     set -a; . ~/.mavis/env; set +a
     .venv/bin/python tools/latency_probe.py ["question" ...]
-    launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.mavis.avatar.plist   # after
-Note whether the Mac is on battery / Low Power Mode (`pmset -g | grep lowpower`):
-on 2026-09-29 that alone made voice conversion ~3x slower.
+Note whether the Mac is on battery / Low Power Mode (`pmset -g | grep lowpower`).
 
-Boundary A (the 2026-09-25 baseline's): /ask sent -> first chunk playable.
-Boundary B (the owner's stopwatch):    end of speech -> first chunk playable
-   = capture's 1.2s trailing-silence wait + STT + A.
-Playback is simulated from each chunk's ready time and duration, so gaps
-between chunks are measured, not assumed.
+What is timed, per question:
+    endpoint  the trailing silence he waits out before he stops listening.
+              Run for real: the question is spoken by `say`, padded with
+              silence, and fed to capture.record_utterance block by block.
+    stt       Groq Whisper on that recording.
+    first     /ask/stream sent -> the first sentence's wav is on disk.
+    TOTAL     end of the owner's speech -> first word OF THE ANSWER
+              = endpoint + stt + first. The criterion is 3s.
+              If `first` is past the runtime's filler gate, the real app
+              plays a filler line before the answer can start, so that
+              question is charged the gate plus the longest filler -- the
+              filler is not counted as his first word.
+Later sentences are checked for stalls: a sentence that is not ready when the
+one before it finishes playing is a gap in the middle of his answer.
 """
-import asyncio, json, os, sys, time, statistics, subprocess, tempfile
-sys.path.insert(0, os.getcwd())
-from avatar import app as app_mod, brain, capture, stt, voice_client
-from avatar.app import read_wav
+import asyncio
+import os
+import statistics
+import subprocess
+import sys
+import tempfile
+import time
 
-# --answers FILE: a JSON list of answer texts voiced as-is, skipping mic, STT
-# and /ask, so two builds can be compared on identical input. Groq's /ask time
-# alone ranged 0.8-5.2s between runs (2026-09-29) and drowned the difference.
-ANSWERS = None
-if "--answers" in sys.argv:
-    i = sys.argv.index("--answers")
-    ANSWERS = json.load(open(sys.argv[i + 1]))
-    del sys.argv[i:i + 2]
-QUESTIONS = [a for a in sys.argv[1:] if not a.startswith("--")] or [
+import numpy as np
+
+sys.path.insert(0, os.getcwd())
+from avatar import app as app_mod, canned, capture, stt, tts  # noqa: E402
+from avatar.app import read_wav  # noqa: E402
+
+QUESTIONS = sys.argv[1:] or [
     "What happens to gold when real yields fall?",
     "How does the Fed affect mortgage rates?",
     "Why do credit spreads widen in a panic?",
     "What does quantitative tightening do to bank reserves?",
-    "How does a strong dollar hit emerging markets?",
+    "What's the news in the markets today?",
 ]
+CRITERION_SECONDS = 3.0
+
 
 class Base:
     class taskMgr:
         @staticmethod
-        def add(*a, **k): pass
-    def accept(self, *a): pass
-    def userExit(self): pass
+        def add(*a, **k):
+            pass
+
+    def accept(self, *a):
+        pass
+
+    def userExit(self):
+        pass
+
 
 class Machine:
-    def note_degraded(self, r): print("  DEGRADED:", r)
+    def note_degraded(self, reason):
+        print("  DEGRADED:", reason)
 
-def spoken(q, path):
-    subprocess.run(["say", "-v", "Samantha", "-o", path, "--data-format=LEI16@16000", q], check=True)
-    s, r = read_wav(path)
-    return s
+
+def spoken_question(question, workdir):
+    """The question as 16kHz audio, as the microphone would deliver it."""
+    path = os.path.join(workdir, "q.wav")
+    subprocess.run(["say", "-v", "Samantha", "-o", path,
+                    "--data-format=LEI16@16000", question], check=True)
+    samples, _rate = read_wav(path)
+    return samples
+
+
+def endpoint(samples):
+    """(what capture kept, seconds of trailing silence it waited out)."""
+    # `say` leaves its own silence at the end; cut to the last loud block so
+    # the wait measured is capture's, then follow with 3s of room silence.
+    usable = samples[: len(samples) // capture.BLOCK * capture.BLOCK].reshape(-1, capture.BLOCK)
+    loud = np.nonzero(np.sqrt(np.mean(np.square(usable), axis=1)) >= capture.SILENCE_RMS)[0]
+    speech = usable[: loud[-1] + 1].reshape(-1)
+    padded = np.concatenate([speech, np.zeros(3 * capture.SAMPLE_RATE, dtype=np.float32)])
+    blocks = (padded[i:i + capture.BLOCK]
+              for i in range(0, len(padded) - capture.BLOCK + 1, capture.BLOCK))
+    kept = capture.record_utterance(blocks=blocks)
+    return kept, (len(kept) - len(speech)) / capture.SAMPLE_RATE
+
 
 async def main():
-    vc = voice_client.VoiceClient()
-    t = time.monotonic(); vc.start(); print(f"warm-up {time.monotonic()-t:.1f}s ready={vc.ready} {vc.last_error or ''}")
-    if "--say" not in sys.argv:
-        print(f"scaffold speaker up={voice_client.start_speaker()}")
-    rt = app_mod.Runtime(Base(), object(), Machine(), voice=vc)
-    rt.on_render = lambda fn: fn()
-    real_say, real_conv = voice_client.say_to_wav, vc.convert
-    def say_t(text, path):
-        t = time.monotonic(); real_say(text, path); print(f"    say  {time.monotonic()-t:4.1f}s {len(text):3d}c {text[:60]!r}")
-    def conv_t(i, o, **k):
-        t = time.monotonic(); ok = real_conv(i, o, **k); print(f"    vc   {time.monotonic()-t:4.1f}s {os.path.basename(o)}"); return ok
-    voice_client.say_to_wav = say_t; vc.convert = conv_t
-    A, B, stalls_all = [], [], []
-    for q in (ANSWERS or QUESTIONS):
-        if ANSWERS:
-            stt_s, ask_s, answer, t0 = 0.0, 0.0, q, time.monotonic()
-        else:
-            with tempfile.TemporaryDirectory() as d:
-                samples = spoken(q, os.path.join(d, "q.wav"))
-            t_stt = time.monotonic(); heard = await stt.transcribe(samples, 16000); stt_s = time.monotonic() - t_stt
-            t0 = time.monotonic()
-            answer = await brain.ask(heard)
-            ask_s = time.monotonic() - t0
-        print(f"    cost model F={vc.cost_model()[0]:.2f} r={vc.cost_model()[1]:.2f}")
-        stream = rt._voice(answer)
-        ready, durs = [], []
-        while (p := await asyncio.to_thread(stream.next)) is not None:
-            ready.append(time.monotonic() - t0)
-            s, r = read_wav(p); durs.append(len(s) / r)
-        parts = len(ready)
-        app_mod._discard(stream)
-        play, stalls = ready[0], []
-        for k in range(1, parts):
-            end_prev = play + durs[k - 1]
-            play = max(ready[k], end_prev)
-            stalls.append(max(0.0, ready[k] - end_prev))
-        # The filler starts with /ask and must finish before the answer can.
-        a = max(ready[0], 0.0 if ANSWERS else FILLER_WORST); b = capture_silence + stt_s + a
-        A.append(a); B.append(b); stalls_all += stalls
-        print(f"{len(answer):3d} chars {parts} chunks | stt {stt_s:.1f} ask {ask_s:.1f} first-chunk-voiced {a - ask_s:.1f} "
-              f"| A={a:.1f}s B={b:.1f}s | gaps {[round(x,1) for x in stalls]} | audio {sum(durs):.1f}s")
-    vc.stop(); voice_client.stop_speaker()
-    print(f"A (baseline boundary): median {statistics.median(A):.1f}s worst {max(A):.1f}s")
-    print(f"B (end of speech):     median {statistics.median(B):.1f}s worst {max(B):.1f}s")
-    print(f"gaps: total {sum(stalls_all):.1f}s max {max(stalls_all, default=0):.1f}s")
+    speaker = tts.Speaker()
+    began = time.monotonic()
+    speaker.start()
+    print(f"voice {speaker.name}: warm-up {time.monotonic() - began:.1f}s "
+          f"ready={speaker.ready} {speaker.last_error or ''}")
+    print(f"endpoint detector: {type(capture.detector()).__name__}")
+    runtime = app_mod.Runtime(Base(), object(), Machine(), speaker=speaker)
+    runtime.on_render = lambda fn: fn()
 
-capture_silence = 1.2
-FILLER_WORST = 4.51   # longest canned filler line, seconds
+    lines = canned.CannedVoice(canned.asset_dir(speaker.name)).by_moment.get("filler", [])
+    longest_filler = max((len(read_wav(path)[0]) / read_wav(path)[1] for _, path in lines),
+                         default=0.0)
+    print(f"filler gate {app_mod.FILLER_AFTER_SECONDS:.1f}s, longest filler {longest_filler:.1f}s")
+
+    totals, firsts, stalls_all = [], [], []
+    for question in QUESTIONS:
+        with tempfile.TemporaryDirectory() as workdir:
+            kept, endpoint_s = endpoint(spoken_question(question, workdir))
+        began = time.monotonic()
+        heard = await stt.transcribe(kept, capture.SAMPLE_RATE)
+        stt_s = time.monotonic() - began
+
+        t0 = time.monotonic()
+        first, stream, feeder = await runtime._answer(heard)
+        ready, durations, text = [time.monotonic() - t0], [], [first[1]]
+        item = first
+        while item is not None:
+            samples, rate = read_wav(item[0])
+            durations.append(len(samples) / rate)
+            item = await asyncio.to_thread(stream.next)
+            if item is not None:
+                ready.append(time.monotonic() - t0)
+                text.append(item[1])
+        await feeder
+        app_mod._discard(stream)
+
+        play, stalls = ready[0], []
+        for k in range(1, len(ready)):
+            end_previous = play + durations[k - 1]
+            stalls.append(max(0.0, ready[k] - end_previous))
+            play = max(ready[k], end_previous)
+        filler = ready[0] > app_mod.FILLER_AFTER_SECONDS
+        answer_first = (max(ready[0], app_mod.FILLER_AFTER_SECONDS + longest_filler)
+                        if filler else ready[0])
+        total = endpoint_s + stt_s + answer_first
+        totals.append(total)
+        firsts.append(ready[0])
+        stalls_all += stalls
+        print(f"{total:4.1f}s {'ok  ' if total <= CRITERION_SECONDS else 'SLOW'}"
+              f"| endpoint {endpoint_s:.1f} stt {stt_s:.1f} first {ready[0]:.1f}"
+              f"{' +FILLER' if filler else ''} "
+              f"| {len(' '.join(text)):3d} chars, {len(ready)} sentences, "
+              f"{sum(durations):.0f}s audio, gaps {[round(x, 1) for x in stalls if x > 0.05]}")
+        print(f"      heard: {heard!r}\n      said:  {' '.join(text)!r}")
+
+    print(f"\nTOTAL end of speech -> first word: median {statistics.median(totals):.1f}s "
+          f"worst {max(totals):.1f}s (criterion {CRITERION_SECONDS:.0f}s)")
+    print(f"first sentence after the question is sent: median "
+          f"{statistics.median(firsts):.1f}s worst {max(firsts):.1f}s")
+    print(f"mid-answer gaps: total {sum(stalls_all):.1f}s max {max(stalls_all, default=0):.1f}s")
+
+
 asyncio.run(main())

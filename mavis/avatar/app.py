@@ -1,7 +1,7 @@
 """The avatar's runtime: mic, speech, backend and voice around `states`.
 
 Two threads, one rule. Panda3D owns the main thread and must keep drawing,
-so the conversation -- wake word, recording, STT, /ask, voice conversion and
+so the conversation -- wake word, recording, STT, the backend, speech and
 audio playback, all of which block -- runs on one worker thread. The worker
 never touches the scene or the state machine directly; it hands callables to
 the render thread through `on_render` and waits for their result. Moving a
@@ -24,19 +24,26 @@ import time
 import numpy as np
 from scipy.io import wavfile
 
-from avatar import (brain, capture, chunks, dismiss, lipsync, states, stt,
-                    voice_client)
-from avatar.voice_stream import VoiceStream
+from avatar import brain, capture, dismiss, lipsync, states, stt, tts
+from avatar.speech import SpeechStream
 
 # Idle prompts he gives into silence before he gives up and goes dark.
 SILENCE_PROMPTS = 2
+# The filler line ("Hang on. Pulling the numbers.") covers a slow answer. A
+# fast one it would only delay: a filler runs 1.5-3.3s and the answer cannot
+# start until it ends. So he waits this long for the first sentence, in
+# silence, and only reaches for the filler if it still is not there.
+# 2.0s sits just above the slowest first sentence measured on an ordinary
+# question (1.8s, 2026-10-01); at 1.2s most answers tripped it and came out
+# later than if he had simply waited.
+FILLER_AFTER_SECONDS = 2.0
 
 
 def read_wav(path: str):
     """Mono float32 samples and the file's own rate.
 
-    stdlib `wave` refuses both audio paths here: the VC worker writes float32
-    (format 3), and so does the `say` scaffold. The rate is read rather than
+    stdlib `wave` refuses the audio here: Kokoro and `say` both write float32
+    (format 3). The rate is read rather than
     assumed -- converted and canned audio are 24000Hz, the scaffold 22050, and
     feeding lipsync the wrong one drifts the mouth off the words.
     """
@@ -61,40 +68,6 @@ def has_speech(samples: np.ndarray) -> bool:
     return bool((np.sqrt(np.mean(np.square(blocks), axis=1)) >= capture.SILENCE_RMS).any())
 
 
-def _measure(text: str, workdir: str):
-    """(seconds, scaffold) for planning and voicing `text`.
-
-    With the warm Tom helper up, every piece the planner can cut at is spoken
-    once (~0.2s for a whole answer) and the plan runs on real durations; a
-    chunk that is exactly one of those pieces -- usually chunk 0 -- reuses its
-    file instead of being spoken again. Without the helper that would be
-    ~1.2s of `say` per piece, so the character estimate is used instead.
-    """
-    if not voice_client.speaker_ready():
-        return chunks.spoken_seconds, voice_client.say_to_wav
-    measured, durations = {}, []
-    pieces = chunks.pieces(text)
-    try:
-        for i, piece in enumerate(pieces):
-            if not voice_client.speaker_ready():
-                # Died mid-answer: the rest would be measured at `say` speed.
-                return chunks.spoken_seconds, voice_client.say_to_wav
-            path = os.path.join(workdir, f"piece-{i}.wav")
-            voice_client.say_to_wav(piece, path)
-            samples, rate = read_wav(path)
-            durations.append(len(samples) / rate)
-            measured.setdefault(piece, path)
-    except Exception:  # noqa: BLE001 - planning on estimates beats not answering
-        return chunks.spoken_seconds, voice_client.say_to_wav
-
-    def scaffold(chunk, path):
-        if chunk in measured:
-            shutil.copyfile(measured[chunk], path)
-        else:
-            voice_client.say_to_wav(chunk, path)
-    return chunks.measured_seconds(pieces, durations), scaffold
-
-
 def _discard(stream) -> None:
     """Stop producing an answer's audio and delete its files. Cannot raise."""
     stream.cancel()
@@ -102,18 +75,18 @@ def _discard(stream) -> None:
 
 
 class Runtime:
-    def __init__(self, base, scene, machine, voice=None, listener=None):
+    def __init__(self, base, scene, machine, speaker=None, listener=None):
         self.base = base
         self.scene = scene
         self.machine = machine
-        self.voice = voice
+        self.speaker = speaker
         self.listener = listener
         self._inbox = queue.Queue()
         self._manual_wake = threading.Event()
         self._stopping = threading.Event()
         self._mouth = None          # (envelope, brows, start) while audio plays
         self._mouth_open = False
-        self._answer_fault = None   # a chunk of the current answer lost its voice
+        self._answer_fault = None   # a sentence of this answer fell back to `say`
         base.taskMgr.add(self._tick, "mavis-runtime")
         base.accept("w", self._manual_wake.set)
         base.accept("escape", base.userExit)
@@ -206,47 +179,30 @@ class Runtime:
                     return
         self._manual_wake.clear()
 
-    def _voice(self, text: str) -> VoiceStream:
-        """Johnny-voiced chunks of `text`, produced while earlier ones play.
+    def _degraded(self) -> None:
+        """A sentence fell back to plain speech: say so on screen. Any thread."""
+        reason = self.speaker.last_error
+        # Remembered as well as shown: `_settle_notice` runs when the first
+        # sentence is ready and would otherwise wipe this at once.
+        self._answer_fault = reason
+        if reason:
+            try:
+                self.on_render(lambda: self.machine.note_degraded(reason))
+            except RuntimeError:
+                pass    # shutting down; nothing left to show it on
 
-        A chunk whose conversion fails plays as its plain scaffold, and the
-        failure goes on screen, exactly as a whole failed answer used to.
+    def _speak(self, first, stream: SpeechStream) -> None:
+        """Play the answer's sentences back to back as they become ready.
+
+        The caption is the sentence he is saying, the answer's own text rather
+        than a transcription of his audio, changed as he moves on.
         """
-        workdir = tempfile.mkdtemp(prefix="mavis-")
-        fixed, rate = (self.voice.cost_model() if self.voice is not None
-                       else voice_client.DEFAULT_COST)
-        seconds, scaffold = _measure(text, workdir)
-        parts = chunks.plan(text, fixed=fixed, rate=rate, seconds=seconds)
-
-        def convert(src, out, gain):
-            if self.voice is None or not self.voice.convert(src, out, gain=gain):
-                return False, None
-            return True, self.voice.last_gain
-
-        self._answer_fault = None
-
-        def degraded():
-            reason = self.voice.last_error
-            # Remembered as well as shown: `_settle_notice` runs right after
-            # the first chunk is ready and would otherwise wipe this at once.
-            self._answer_fault = reason
-            if reason:
-                try:
-                    self.on_render(lambda: self.machine.note_degraded(reason))
-                except RuntimeError:
-                    pass    # shutting down; nothing left to show it on
-
-        stream = VoiceStream(parts, workdir, scaffold=scaffold,
-                             convert=convert,
-                             on_degraded=degraded if self.voice else None)
-        return stream.start()
-
-    def _speak(self, first: str, stream: VoiceStream) -> None:
-        """Play the answer's chunks back to back as they become ready."""
-        path = first
-        while path is not None:
+        item = first
+        while item is not None:
+            path, sentence = item
+            self.on_render(lambda text=sentence: self.scene.show_caption(text))
             self.say(path)
-            path = stream.next()
+            item = stream.next()
 
     def _settle_notice(self) -> None:
         """Clear a stale error, but keep saying so while the voice is degraded.
@@ -254,34 +210,49 @@ class Runtime:
         Render thread. A notice left up after the fault has passed claims
         something is broken that is not -- as misleading as no notice at all.
         """
-        if self.voice is not None and self.voice.degraded:
-            self.machine.note_degraded(self.voice.last_error or "worker unavailable")
+        if self.speaker is not None and self.speaker.degraded:
+            self.machine.note_degraded(self.speaker.last_error or "voice unavailable")
         elif self._answer_fault:
             self.machine.note_degraded(self._answer_fault)
         else:
             self.scene.show_notice("")
 
-    async def _answer(self, question: str):
-        """(first wav, the stream of the rest, the exact answer text).
+    async def _feed(self, question: str, stream: SpeechStream) -> None:
+        """Pour the answer's sentences into `stream` as the backend writes them."""
+        try:
+            async for sentence in brain.sentences(question):
+                stream.feed(sentence)
+        except asyncio.CancelledError:
+            stream.cancel()
+            raise
+        except brain.BrainError as exc:
+            stream.fail(exc)
+        except Exception as exc:  # noqa: BLE001 - reaches the consumer as a failure
+            stream.fail(brain.BrainError(f"{type(exc).__name__}: {exc}"))
+        else:
+            stream.close()
 
-        Returns once the FIRST chunk is voiced, not the whole answer -- that
-        is the point of chunking. The text is returned rather than re-derived
-        so the caption is the answer itself, not a transcription of his audio.
+    async def _answer(self, question: str):
+        """(first (wav, sentence), the stream of the rest, the feeding task).
+
+        Returns once the FIRST sentence is voiced, while the backend is still
+        writing the rest -- that is the whole point.
         """
-        answer = await brain.ask(question)
-        if not answer:
-            raise brain.BrainError("the backend returned an empty answer")
-        # Off the event loop: measuring the answer runs the speech helper.
-        stream = await asyncio.to_thread(self._voice, answer)
+        self._answer_fault = None
+        stream = SpeechStream(self.speaker, tempfile.mkdtemp(prefix="mavis-"),
+                              on_degraded=self._degraded).start()
+        feeder = asyncio.create_task(self._feed(question, stream))
         try:
             first = await asyncio.to_thread(stream.next)
         except BaseException:
+            feeder.cancel()
             _discard(stream)
             raise
         if first is None:
+            feeder.cancel()
             _discard(stream)
-            raise brain.BrainError("the answer produced no audio")
-        return first, stream, answer
+            raise brain.BrainError("the backend returned an empty answer")
+        return first, stream, feeder
 
     async def _conversation(self) -> None:
         """One wake-to-dismissal session."""
@@ -316,47 +287,60 @@ class Runtime:
                 self.on_render(self.machine.sleep)
                 return
 
-            # The filler covers the wait: it plays while the answer is fetched
-            # and converted, rather than after.
             pending = asyncio.create_task(self._answer(text))
             try:
-                await asyncio.to_thread(self.say, line and line[1])
-            except BaseException:
-                pending.cancel()
-                raise
+                # shield: the timeout must not cancel the answer it waited on.
+                await asyncio.wait_for(asyncio.shield(pending), FILLER_AFTER_SECONDS)
+            except asyncio.TimeoutError:
+                try:
+                    await asyncio.to_thread(self.say, line and line[1])
+                except BaseException:
+                    pending.cancel()
+                    raise
+            except brain.BrainError:
+                pass    # collected, and reported, just below
             try:
-                first, stream, answer_text = await pending
+                first, stream, feeder = await pending
             except brain.BrainError as exc:
                 self.on_render(lambda: self.machine.on_failure(str(exc)))
                 continue
+            broke = None
             try:
                 self.on_render(lambda: (self._settle_notice(),
-                                        self.scene.show_caption(answer_text),
                                         self.machine.on_answer_ready()))
                 await asyncio.to_thread(self._speak, first, stream)
+            except brain.BrainError as exc:
+                broke = str(exc)    # the backend dropped mid-answer
             finally:
                 # Discard FIRST: it cannot raise, and on_render can. Escape
                 # pressed mid-sentence sets _stopping, the render loop is
                 # already gone, and on_render gives up with RuntimeError --
                 # which would otherwise skip this cleanup and replace whatever
                 # `say` was propagating with a shutdown error.
+                feeder.cancel()
                 _discard(stream)
                 self._answer_fault = None   # shown for this answer only
                 try:
                     self.on_render(lambda: self.scene.show_caption(""))
                 except RuntimeError:
                     pass    # shutting down; there is no screen left to clear
+            if broke:
+                self.on_render(lambda: self.machine.on_failure(broke))
+                continue
             self.on_render(self.machine.on_spoken)
 
     async def _serve(self) -> None:
-        if self.voice is not None:
+        if self.speaker is not None:
             self.on_render(lambda: self.scene.show_notice("Warming up his voice..."))
-            await asyncio.to_thread(self.voice.start)
-            if self.voice.degraded:
-                reason = self.voice.last_error or "worker unavailable"
+            await asyncio.to_thread(self.speaker.start)
+            if self.speaker.degraded:
+                reason = self.speaker.last_error or "voice unavailable"
                 self.on_render(lambda: self.machine.note_degraded(reason))
             else:
                 self.on_render(lambda: self.scene.show_notice(""))
+            # Loaded here, not on the first question, where it would be ~0.3s
+            # of his first answer.
+            await asyncio.to_thread(capture.detector)
         while not self._stopping.is_set():
             try:
                 await asyncio.to_thread(self.wait_for_wake)
@@ -400,8 +384,11 @@ def main() -> int:
     base.win.request_properties(chrome)
     base.win.set_clear_color(Vec4(0.0, 0.0, 0.0, 0.0))
     scene = scene_mod.AvatarScene(base)
-    voice = voice_client.VoiceClient()
-    machine = states.AvatarApp(scene=scene, canned=canned.CannedVoice())
+    speaker = tts.Speaker()
+    # The canned lines are rendered per voice, so the greeting and the answer
+    # that follows it come out of the same mouth.
+    machine = states.AvatarApp(
+        scene=scene, canned=canned.CannedVoice(canned.asset_dir(speaker.name)))
 
     try:
         listener = wake.WakeListener()
@@ -409,17 +396,12 @@ def main() -> int:
         listener = None
         print(f"{exc}\nPress W in the window to wake him.", file=sys.stderr)
 
-    runtime = Runtime(base, scene, machine, voice=voice, listener=listener)
-    # Alongside the voice worker's much longer warm-up; `say` covers until then.
-    threading.Thread(target=voice_client.start_speaker, name="mavis-speaker",
-                     daemon=True).start()
+    runtime = Runtime(base, scene, machine, speaker=speaker, listener=listener)
     runtime.start()
     try:
         base.run()
     finally:
         runtime.stop()
-        voice.stop()
-        voice_client.stop_speaker()
     return 0
 
 

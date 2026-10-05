@@ -1,9 +1,7 @@
-"""Runtime wiring around the caption.
+"""Runtime wiring: the answer stream, the caption and the notices.
 
-The suite had no test that drove `Runtime` at all, so the caption's contract
--- `_answer` handing the exact answer text back for display -- shipped as the
-kind of change this repo has been burned by before: correct in isolation, with
-the call site free to drift.
+The caption's contract is that it shows the answer's own text, sentence by
+sentence as he says it, never a transcription of his audio.
 """
 import asyncio
 import os
@@ -38,87 +36,6 @@ class CaptionScene:
         self.captions.append(text)
 
 
-def _runtime():
-    return app_mod.Runtime(StubBase(), CaptionScene(), machine=object())
-
-
-class FakeStream:
-    def __init__(self, paths):
-        self.paths = list(paths)
-        self.cancelled = False
-        self.workdir = "/nonexistent/mavis-test"
-
-    def next(self, timeout=None):
-        return self.paths.pop(0) if self.paths else None
-
-    def cancel(self):
-        self.cancelled = True
-
-
-def test_answer_returns_the_first_chunk_the_stream_and_the_exact_text(monkeypatch):
-    """The caption must be the answer itself, not a re-derivation of it."""
-    runtime = _runtime()
-    stream = FakeStream(["/tmp/fake/voice-0.wav", "/tmp/fake/voice-1.wav"])
-
-    async def fake_ask(q):
-        return "Gold bids when real yields fall, choom."
-
-    monkeypatch.setattr(app_mod.brain, "ask", fake_ask)
-    monkeypatch.setattr(runtime, "_voice", lambda text: stream)
-
-    first, rest, text = asyncio.run(runtime._answer("what about gold"))
-
-    assert first == "/tmp/fake/voice-0.wav"
-    assert rest is stream and rest.paths == ["/tmp/fake/voice-1.wav"]
-    assert text == "Gold bids when real yields fall, choom."
-
-
-def test_answer_with_no_audio_is_a_failure_not_a_silent_answer(monkeypatch):
-    runtime = _runtime()
-    stream = FakeStream([])
-
-    async def fake_ask(q):
-        return "Something."
-
-    monkeypatch.setattr(app_mod.brain, "ask", fake_ask)
-    monkeypatch.setattr(runtime, "_voice", lambda text: stream)
-
-    with pytest.raises(app_mod.brain.BrainError):
-        asyncio.run(runtime._answer("anything"))
-    assert stream.cancelled
-
-
-def test_speak_plays_every_chunk_in_order(monkeypatch):
-    runtime = _runtime()
-    played = []
-    monkeypatch.setattr(runtime, "say", played.append)
-    runtime._speak("c0", FakeStream(["c1", "c2"]))
-    assert played == ["c0", "c1", "c2"]
-
-
-class FakeVoice:
-    """Converts the first `good` chunks, then fails like a wedged worker."""
-
-    def __init__(self, good):
-        self.good = good
-        self.calls = []
-        self.last_gain = None
-        self.last_error = None
-
-    def convert(self, src, out, gain=None):
-        self.calls.append(gain)
-        if len(self.calls) > self.good:
-            self.last_error = "voice worker did not answer within 120s"
-            return False
-        with open(out, "wb") as fh:
-            fh.write(b"x")
-        self.last_gain = gain or 5.0
-        return True
-
-    def cost_model(self):
-        return 0.5, 0.3     # fast enough that the planner really chunks
-
-
 class NoticeMachine:
     def __init__(self):
         self.degraded = []
@@ -127,55 +44,147 @@ class NoticeMachine:
         self.degraded.append(reason)
 
 
-def _voiced(monkeypatch, voice, text):
-    machine = NoticeMachine()
-    runtime = app_mod.Runtime(StubBase(), CaptionScene(), machine=machine, voice=voice)
-    monkeypatch.setattr(runtime, "on_render", lambda fn: fn())
-    monkeypatch.setattr(app_mod.voice_client, "say_to_wav",
-                        lambda t, path: open(path, "wb").write(b"s"))
-    stream = runtime._voice(text)
-    paths = []
-    while (p := stream.next(timeout=5)) is not None:
-        paths.append(os.path.basename(p))
-    app_mod._discard(stream)
-    return paths, machine
+class FakeSpeaker:
+    """Speaks the first `good` sentences in voice, then falls back like a
+    voice that has stopped answering."""
+
+    name = "fake"
+
+    def __init__(self, good=99):
+        self.good = good
+        self.said = []
+        self.degraded = False
+        self.last_error = None
+
+    def synth(self, text, path):
+        self.said.append(text)
+        with open(path, "wb") as fh:
+            fh.write(b"x")
+        if len(self.said) > self.good:
+            self.last_error = "kokoro failed: out of memory"
+            return False
+        return True
 
 
-TEXT = ("Look, choom. " + "The Fed moves first and everyone else follows behind. " * 6)
+def _runtime(speaker=None, scene=None, machine=None):
+    runtime = app_mod.Runtime(StubBase(), scene or CaptionScene(),
+                              machine=machine or NoticeMachine(),
+                              speaker=speaker or FakeSpeaker())
+    runtime.on_render = lambda fn: fn()
+    return runtime
 
 
-def test_voice_chunks_share_one_gain(monkeypatch):
-    voice = FakeVoice(good=99)
-    paths, machine = _voiced(monkeypatch, voice, TEXT)
-    assert len(paths) > 1 and all(p.startswith("voice-") for p in paths)
-    assert voice.calls[0] is None and set(voice.calls[1:]) == {5.0}
-    assert machine.degraded == []
+def _answering(monkeypatch, sentences, fail=None):
+    async def fake_sentences(question):
+        for sentence in sentences:
+            yield sentence
+        if fail:
+            raise fail
+    monkeypatch.setattr(app_mod.brain, "sentences", fake_sentences)
 
 
-def test_a_failing_voice_falls_back_to_the_scaffold_and_says_so(monkeypatch):
-    voice = FakeVoice(good=1)
-    paths, machine = _voiced(monkeypatch, voice, TEXT)
-    assert paths[0].startswith("voice-")
-    assert paths[1:] and all(p.startswith("scaffold-") for p in paths[1:])
-    assert machine.degraded == ["voice worker did not answer within 120s"]
+async def _whole_answer(runtime, question="anything"):
+    first, stream, feeder = await runtime._answer(question)
+    items = [first]
+    try:
+        while (item := await asyncio.to_thread(stream.next, 5)) is not None:
+            items.append(item)
+    finally:
+        await feeder
+        app_mod._discard(stream)
+    return items
 
 
-def test_answer_still_rejects_an_empty_answer(monkeypatch):
+def test_answer_hands_back_the_first_sentence_voiced_and_then_the_rest(monkeypatch):
     runtime = _runtime()
+    _answering(monkeypatch, ["Gold bids when real yields fall.", "That is the trade, choom."])
 
-    async def fake_ask(q):
-        return ""
+    items = asyncio.run(_whole_answer(runtime))
 
-    monkeypatch.setattr(app_mod.brain, "ask", fake_ask)
+    assert [text for _, text in items] == [
+        "Gold bids when real yields fall.", "That is the trade, choom."]
+    assert os.path.basename(items[0][0]) == "speech-0.wav"
 
-    with pytest.raises(app_mod.brain.BrainError):
+
+def test_an_answer_with_no_sentences_is_a_failure_not_a_silent_answer(monkeypatch):
+    runtime = _runtime()
+    _answering(monkeypatch, [])
+
+    with pytest.raises(app_mod.brain.BrainError, match="empty answer"):
         asyncio.run(runtime._answer("anything"))
+
+
+def test_a_backend_failure_before_the_first_sentence_is_the_answers_failure(monkeypatch):
+    runtime = _runtime()
+    _answering(monkeypatch, [], fail=app_mod.brain.BrainError("MAVIS backend returned 401"))
+
+    with pytest.raises(app_mod.brain.BrainError, match="401"):
+        asyncio.run(runtime._answer("anything"))
+
+
+def test_a_backend_failure_mid_answer_arrives_after_what_was_already_written(monkeypatch):
+    runtime = _runtime()
+    _answering(monkeypatch, ["One."], fail=app_mod.brain.BrainError("Groq error 503"))
+
+    async def run():
+        first, stream, feeder = await runtime._answer("anything")
+        try:
+            with pytest.raises(app_mod.brain.BrainError, match="503"):
+                await asyncio.to_thread(stream.next, 5)
+        finally:
+            await feeder
+            app_mod._discard(stream)
+        return first
+
+    assert asyncio.run(run())[1] == "One."
+
+
+def test_an_unexpected_feeder_error_becomes_a_brain_error(monkeypatch):
+    """Anything else would escape `_conversation`'s handler and put him to
+    sleep mid-session instead of showing the failure and listening again."""
+    runtime = _runtime()
+    _answering(monkeypatch, [], fail=ValueError("boom"))
+
+    with pytest.raises(app_mod.brain.BrainError, match="ValueError: boom"):
+        asyncio.run(runtime._answer("anything"))
+
+
+class FakeStream:
+    def __init__(self, items):
+        self.items = list(items)
+
+    def next(self, timeout=None):
+        return self.items.pop(0) if self.items else None
+
+
+def test_speak_plays_every_sentence_in_order_and_captions_each_as_it_plays(monkeypatch):
+    scene = CaptionScene()
+    runtime = _runtime(scene=scene)
+    events = []
+    monkeypatch.setattr(scene, "show_caption", lambda text: events.append(("caption", text)))
+    monkeypatch.setattr(runtime, "say", lambda path: events.append(("say", path)))
+
+    runtime._speak(("c0.wav", "One."), FakeStream([("c1.wav", "Two.")]))
+
+    assert events == [("caption", "One."), ("say", "c0.wav"),
+                      ("caption", "Two."), ("say", "c1.wav")]
+
+
+def test_a_sentence_that_falls_back_to_plain_speech_says_so_once(monkeypatch):
+    machine = NoticeMachine()
+    runtime = _runtime(speaker=FakeSpeaker(good=1), machine=machine)
+    _answering(monkeypatch, ["One.", "Two.", "Three."])
+
+    items = asyncio.run(_whole_answer(runtime))
+
+    assert len(items) == 3                      # nothing went silent
+    assert machine.degraded == ["kokoro failed: out of memory"]
 
 
 def test_on_render_gives_up_once_shutting_down():
     """Why the caption-clear in `finally` is wrapped: after Escape the render
     loop is gone, on_render raises, and cleanup behind it must still run."""
-    runtime = _runtime()
+    runtime = app_mod.Runtime(StubBase(), CaptionScene(), machine=object())
     runtime._stopping.set()
 
     with pytest.raises(RuntimeError, match="shutting down"):
@@ -229,104 +238,128 @@ class SettleScene:
         self.notices.append(text)
 
 
-def test_a_first_chunk_fault_survives_the_settle_that_follows_it(monkeypatch):
-    """The settle runs right after chunk 0 is ready; it used to wipe the notice
-    a failed chunk 0 had just raised, so he spoke in the wrong voice silently."""
-    voice = FakeVoice(good=0)
-    voice.degraded = False          # one failed call does not condemn the worker
-    machine = NoticeMachine()
-    scene = SettleScene()
-    runtime = app_mod.Runtime(StubBase(), scene, machine=machine, voice=voice)
-    monkeypatch.setattr(runtime, "on_render", lambda fn: fn())
-    monkeypatch.setattr(app_mod.voice_client, "say_to_wav",
-                        lambda t, path: open(path, "wb").write(b"s"))
-    stream = runtime._voice("Short answer, choom.")
-    assert stream.next(timeout=5).endswith("scaffold-0.wav")
-    runtime._settle_notice()
-    assert machine.degraded[-1] == "voice worker did not answer within 120s"
+def test_a_first_sentence_fault_survives_the_settle_that_follows_it(monkeypatch):
+    """The settle runs right after the first sentence is ready; it must not
+    wipe the notice that sentence just raised, or he speaks in the wrong
+    voice with nothing on screen to say why."""
+    speaker = FakeSpeaker(good=0)
+    machine, scene = NoticeMachine(), SettleScene()
+    runtime = _runtime(speaker=speaker, scene=scene, machine=machine)
+    _answering(monkeypatch, ["Short answer, choom."])
+
+    async def run():
+        first, stream, feeder = await runtime._answer("anything")
+        runtime._settle_notice()
+        await feeder
+        app_mod._discard(stream)
+
+    asyncio.run(run())
+    assert machine.degraded[-1] == "kokoro failed: out of memory"
     assert "" not in scene.notices
-    app_mod._discard(stream)
 
 
 def test_without_a_fault_the_settle_clears_the_notice():
     scene = SettleScene()
-    runtime = app_mod.Runtime(StubBase(), scene, machine=NoticeMachine(),
-                              voice=FakeVoice(good=9))
-    runtime.voice.degraded = False
+    runtime = _runtime(scene=scene)
     runtime._settle_notice()
     assert scene.notices == [""]
 
 
-def _tone_wav(path, seconds):
-    from scipy.io import wavfile
+def test_a_voice_that_never_started_keeps_its_notice_up():
+    speaker = FakeSpeaker()
+    speaker.degraded, speaker.last_error = True, "voice model missing"
+    machine, scene = NoticeMachine(), SettleScene()
+    runtime = _runtime(speaker=speaker, scene=scene, machine=machine)
+    runtime._settle_notice()
+    assert machine.degraded == ["voice model missing"] and scene.notices == []
+
+
+# -- one whole conversation ----------------------------------------------------
+
+class ScriptedMachine(NoticeMachine):
+    """Greets, answers one question with a filler on offer, then is dismissed."""
+
+    def __init__(self):
+        super().__init__()
+        self.events = []
+
+    def on_wake(self):
+        return ("Awake.", "greeting.wav")
+
+    def on_transcript(self, text):
+        if text == "that's all":
+            return ("dismiss", ("Later.", "bye.wav"))
+        return ("ask", ("Hang on.", "filler.wav"))
+
+    def on_answer_ready(self):
+        self.events.append("answer_ready")
+
+    def on_spoken(self):
+        self.events.append("spoken")
+
+    def on_failure(self, reason):
+        self.events.append(f"failure: {reason}")
+
+    def sleep(self):
+        self.events.append("sleep")
+
+
+class ConversationScene(CaptionScene, SettleScene):
+    def __init__(self):
+        CaptionScene.__init__(self)
+        SettleScene.__init__(self)
+
+
+def _converse(monkeypatch, sentences, delay=0.0, fail=None):
     import numpy as np
-    wavfile.write(path, 22050, np.full(int(seconds * 22050), 0.1, dtype=np.float32))
+    machine, scene = ScriptedMachine(), ConversationScene()
+    runtime = _runtime(scene=scene, machine=machine)
+    played = []
+    monkeypatch.setattr(runtime, "say", lambda path: played.append(os.path.basename(path)))
+    heard = iter(["what about gold", "that's all"])
+    monkeypatch.setattr(app_mod.capture, "record_utterance",
+                        lambda: np.full(app_mod.capture.BLOCK, 0.5, dtype=np.float32))
+
+    async def fake_transcribe(samples, rate):
+        return next(heard)
+
+    async def fake_sentences(question):
+        await asyncio.sleep(delay)
+        for sentence in sentences:
+            yield sentence
+        if fail:
+            raise fail
+
+    monkeypatch.setattr(app_mod.stt, "transcribe", fake_transcribe)
+    monkeypatch.setattr(app_mod.brain, "sentences", fake_sentences)
+    asyncio.run(runtime._conversation())
+    return played, machine, scene
 
 
-def test_measure_plans_on_spoken_durations_and_reuses_the_first_piece(monkeypatch, tmp_path):
-    """Two sentences of equal length, one spoken 4x slower (think "~1.9%"):
-    the planner must see that, and chunk 0's scaffold must not be spoken twice."""
-    spoken = []
-
-    def fake_say(text, path):
-        spoken.append(text)
-        _tone_wav(path, 8.0 if "Slow" in text else 2.0)
-    monkeypatch.setattr(app_mod.voice_client, "speaker_ready", lambda: True)
-    monkeypatch.setattr(app_mod.voice_client, "say_to_wav", fake_say)
-    seconds, scaffold = app_mod._measure("Fast one here. Slow one here.", str(tmp_path))
-    assert seconds("Fast one here.") == 2.0
-    assert seconds("Slow one here.") == 8.0
-    assert spoken == ["Fast one here.", "Slow one here."]
-    scaffold("Fast one here.", str(tmp_path / "scaffold-0.wav"))
-    scaffold("Fast one here. Slow one here.", str(tmp_path / "scaffold-1.wav"))
-    assert spoken[2:] == ["Fast one here. Slow one here."]     # only the merged one
-    assert (tmp_path / "scaffold-0.wav").stat().st_size > 1000
+def test_a_fast_answer_is_not_held_up_by_the_filler_line(monkeypatch):
+    played, machine, scene = _converse(monkeypatch, ["Gold bids.", "That is the trade."])
+    assert played == ["greeting.wav", "speech-0.wav", "speech-1.wav", "bye.wav"]
+    assert machine.events == ["answer_ready", "spoken", "sleep"]
+    assert scene.captions == ["Gold bids.", "That is the trade.", ""]
 
 
-def test_measure_uses_the_estimate_when_the_speaker_is_down(monkeypatch, tmp_path):
-    monkeypatch.setattr(app_mod.voice_client, "speaker_ready", lambda: False)
-    seconds, scaffold = app_mod._measure("Anything at all.", str(tmp_path))
-    assert seconds is app_mod.chunks.spoken_seconds
-    assert scaffold is app_mod.voice_client.say_to_wav
+def test_a_slow_answer_is_covered_by_the_filler_line(monkeypatch):
+    monkeypatch.setattr(app_mod, "FILLER_AFTER_SECONDS", 0.05)
+    played, machine, _ = _converse(monkeypatch, ["Gold bids."], delay=0.3)
+    assert played == ["greeting.wav", "filler.wav", "speech-0.wav", "bye.wav"]
+    assert machine.events == ["answer_ready", "spoken", "sleep"]
 
 
-def test_measure_falls_back_when_measuring_fails(monkeypatch, tmp_path):
-    def broken(text, path):
-        raise OSError("helper died and say too")
-    monkeypatch.setattr(app_mod.voice_client, "speaker_ready", lambda: True)
-    monkeypatch.setattr(app_mod.voice_client, "say_to_wav", broken)
-    seconds, _ = app_mod._measure("Anything at all.", str(tmp_path))
-    assert seconds is app_mod.chunks.spoken_seconds
+def test_a_failed_answer_is_shown_and_he_keeps_listening(monkeypatch):
+    played, machine, _ = _converse(
+        monkeypatch, [], fail=app_mod.brain.BrainError("MAVIS backend unreachable"))
+    assert played == ["greeting.wav", "bye.wav"]
+    assert machine.events == ["failure: MAVIS backend unreachable", "sleep"]
 
 
-def test_voice_plans_with_the_measured_durations(monkeypatch):
-    seen = {}
-    real_plan = app_mod.chunks.plan
-
-    def spy(text, **kwargs):
-        seen["seconds"] = kwargs.get("seconds")
-        return real_plan(text, **kwargs)
-    monkeypatch.setattr(app_mod.chunks, "plan", spy)
-    monkeypatch.setattr(app_mod.voice_client, "speaker_ready", lambda: True)
-    monkeypatch.setattr(app_mod.voice_client, "say_to_wav",
-                        lambda t, path: _tone_wav(path, 3.0))
-    runtime = app_mod.Runtime(StubBase(), CaptionScene(), machine=NoticeMachine(),
-                              voice=FakeVoice(good=99))
-    monkeypatch.setattr(runtime, "on_render", lambda fn: fn())
-    stream = runtime._voice("One sentence here. Another one here.")
-    while stream.next(timeout=5) is not None:
-        pass
-    app_mod._discard(stream)
-    assert seen["seconds"]("One sentence here.") == 3.0
-
-
-def test_measure_stops_at_once_when_the_speaker_dies_mid_answer(monkeypatch, tmp_path):
-    """The rest must not be measured at `say` speed (~1.2s a piece)."""
-    ready = iter([True, True, False])
-    spoken = []
-    monkeypatch.setattr(app_mod.voice_client, "speaker_ready", lambda: next(ready, False))
-    monkeypatch.setattr(app_mod.voice_client, "say_to_wav",
-                        lambda t, path: (spoken.append(t), _tone_wav(path, 1.0)))
-    seconds, _ = app_mod._measure("One. Two. Three. Four.", str(tmp_path))
-    assert seconds is app_mod.chunks.spoken_seconds
-    assert spoken == ["One."]
+def test_an_answer_that_breaks_off_plays_what_it_had_then_reports(monkeypatch):
+    played, machine, scene = _converse(
+        monkeypatch, ["Gold bids."], fail=app_mod.brain.BrainError("Groq error 503"))
+    assert played == ["greeting.wav", "speech-0.wav", "bye.wav"]
+    assert machine.events == ["answer_ready", "failure: Groq error 503", "sleep"]
+    assert scene.captions[-1] == ""             # the caption is cleared either way

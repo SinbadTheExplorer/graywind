@@ -15,4 +15,6 @@ assets/avatar/*
 # are rebuilt with `scripts/pregen_lines.py`.
 assets/voice/*
 !assets/voice/ATTRIBUTION.md
+# The same lines rendered in a stock text-to-speech voice: regenerable.
+assets/voice-*/
 .venv
