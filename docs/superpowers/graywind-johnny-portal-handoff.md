@@ -1,5 +1,9 @@
 # Johnny — Portal Mode (head-tracked window + virtual shadow) — Session Handoff
 
+> **SUPERSEDED (2026-10-05)** by `graywind-johnny-portal-terminal-handoff.md`
+> — act from that file. This one is kept as the session log.
+
+
 **Written:** 2026-10-04 · **Branch:** `feat/johnny-portal`, cut from
 `feat/mavis-avatar` at `f3f4771`. Builds the owner's long-standing vision for
 Johnny, from a reel (@ojrgb, "Virtual shadow + off axis projection"): the
