@@ -56,6 +56,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <string>1</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Johnny listens for the wake phrase and for your spoken questions.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>In portal mode Johnny watches where your eyes are, so the room behind the screen moves the way a real window would. Frames never leave this Mac.</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
 </dict>
@@ -86,3 +88,4 @@ codesign --force --sign - --identifier com.mavis.johnny "$APP"
 echo "Built $APP"
 codesign -dv "$APP" 2>&1 | grep -E "^Identifier|^Signature" | sed 's/^/  /'
 echo "macOS will ask for the microphone the first time he runs, as 'Johnny'."
+echo "With MAVIS_PORTAL=1 in ~/.mavis/env it will also ask for the camera."

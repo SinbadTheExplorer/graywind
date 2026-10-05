@@ -1,50 +1,16 @@
 # Avatar model attribution
 
-Two models are supported. `avatar/scene.py` picks `keanu` when it has been
-built and falls back to `jonny`; `MAVIS_AVATAR=jonny|keanu` overrides.
+`mech-bust` (committed, below) is the default; `keanu` is used when built
+locally and chosen with M or `MAVIS_AVATAR=keanu`. The free Sketchfab "Jonny
+Silverhand" (Stuxed, CC BY) was removed on 2026-10-04 at the owner's request. More can be
+dropped in without code changes -- see "Adding your own models" at the end.
+Press **M** while he runs to cycle through every model on disk.
 
-**This directory is gitignored except for `ATTRIBUTION.md` and `jonny.glb`.**
+**This directory is gitignored except for `ATTRIBUTION.md` and the
+`extra/mech-bust/` model.**
 The repo is public, so committing a model publishes it. Only add an unignore
 line in `mavis/.gitignore` for an asset whose licence actually permits
 redistribution, and record it here when you do.
-
----
-
-## `jonny` — committed, CC BY
-
-"Jonny Silverhand" by **Stuxed**
-https://sketchfab.com/3d-models/jonny-silverhand-806032afcab34b118809e864a5c54ee4
-
-Licensed **CC Attribution (CC BY)**. Credit is a licence condition, so the
-on-screen credit in `avatar/scene.py` is required, not decorative. Do not
-remove it.
-
-A stylized fan interpretation, not screen-accurate — the creator notes the
-metal arm is on the wrong side. The base mesh is a Ready Player Me export,
-which is where the `Wolf3D_*` mesh names and the aliased UV sets come from.
-Being an RPM export is also why it has `mouthOpen`/`mouthSmile` **morph
-targets**, which is how its mouth moves.
-
-All 20 textures are embedded in the GLB's binary chunk as `bufferView`
-images — there are no external `uri` references, so `jonny.glb` is
-self-contained and can be moved without breaking texture resolution.
-
-`jonny.glb` is the Sketchfab "Original format" download and is the only model
-file here under version control. Rebuild its artifacts with:
-
-    .venv/bin/python -m tools.repair_gltf
-    .venv/bin/gltf2bam assets/avatar/jonny_fixed.glb assets/avatar/jonny_fixed.bam
-
-`gltf2bam` should print **no** `Could not find joint in jvtmap` warnings. An
-earlier revision of the repair produced ~189 of them and they were recorded
-here as harmless zero-weight joint indices. They were not harmless: they were
-a symptom of `Wolf3D_Outfit_Bottom` being read at the wrong stride, which also
-exploded that mesh to ±18 units and put the camera inside the geometry. If
-those warnings ever come back, the repair is wrong again — see
-`tools/repair_gltf.py` and `test_declared_attributes_fill_the_byte_stride`.
-
-**This is the only model the test suite may assert against**, because it is
-the only one present on a fresh clone.
 
 ---
 
@@ -105,3 +71,121 @@ is junk so the exporter would name the nodes unusably, the model is ~73 units
 tall, and the source textures are ~357MB of uncompressed 2048px TGAs. The
 result is ~80MB; skipping the texture caps gives ~344MB instead, which matters
 on the 8GB M2 this targets.
+
+---
+
+## `mech-bust` — committed, CC BY 4.0 (modified)
+
+"Mech bust" by **Just8** — https://sketchfab.com/3d-models/mech-bust-f06084d487d94137bc4dd58e48696439
+— the model in the off-axis-projection reel that portal mode was built from.
+
+Licensed **CC Attribution 4.0** (stated in the file's own `asset.extras`).
+The on-screen credit `Model: "Mech bust" by Just8 (CC BY 4.0)` is the
+licence condition; do not remove it.
+
+**Changes from the original** (CC BY requires saying so). The download is a
+glTF-Transform–optimised GLB (meshopt geometry, quantized attributes, WebP
+textures) that panda3d-gltf cannot read. `mech_bust.glb` here was produced by:
+
+    npx -y @gltf-transform/cli@4 dequantize mech_bust_small.glb unpacked.glb
+    .venv/bin/python -m tools.fix_sketchfab_glb unpacked.glb fixed.glb
+    npx -y @gltf-transform/cli@4 prune fixed.glb mech_bust.glb
+
+i.e. geometry decompressed; WebP textures re-encoded as JPEG (PNG where alpha
+is used); four of its five skins, which share one skeleton and differ only by
+a uniform scale + offset, merged into the first with that offset baked into
+their vertices; bones and meshes regrouped under one `Armature` node; and
+Sketchfab's background-particle plane dropped. Appearance and animation are
+otherwise unchanged. 21.9 MB, 226k triangles, 54 bones, one clip (`anim`),
+jaw `jaw_07` (hinge axis `r`) drives the mouth.
+
+---
+
+## Adding your own models (press M to cycle)
+
+Any rigged character can join the rotation. Make a folder under
+`assets/avatar/extra/` named for the model, put the model and an
+`avatar.json` in it, and restart Johnny:
+
+    assets/avatar/extra/robot/robot.glb
+    assets/avatar/extra/robot/avatar.json
+
+**Everything under `extra/` is gitignored** (it sits inside the ignored
+`assets/avatar/*`), so a model you are allowed to *use* but not to
+*redistribute* never reaches this public repo. Keep it that way.
+
+Let the inspector write `avatar.json` for you, then fix the credit by hand:
+
+    .venv/bin/python -m tools.inspect_model assets/avatar/extra/robot/robot.glb
+
+| key | required | meaning |
+|---|---|---|
+| `model` | yes | file name inside the folder: `.glb`, `.gltf` or `.bam` |
+| `credit` | yes | shown on screen. For CC BY models the credit IS the licence condition |
+| `head_mesh` | no | mesh to frame on; without it the top `head_fraction` of the model is assumed to be the head |
+| `glow` | no | multiplies the model's emissive (self-lit) materials, so its lights pass the glow threshold: the mech's eyes use 16. Leave out for 1 |
+| `dormant` | no | `true` keeps the model on disk but out of the M rotation and never the default; `MAVIS_AVATAR=<name>` still loads it |
+| `head_fraction` | no | used only without `head_mesh`: 0.19 (default) for a full figure, ~0.5 for a bust, ~0.9 for a head alone |
+| `mouth` | no | `{"kind": "slider", "slider": "jawOpen"}` (a morph), `{"kind": "joint", "joint": "...", "axis": "p", "degrees": 14}` (a jaw bone), `{"kind": "nod", "degrees": 3}` (the whole model dips with his voice), or omit for no lip-sync |
+| `idle_anim` | no | clip to loop; without one he holds still and sways |
+| `anims`, `idle_variety`, `poses`, `sway` | no | as in the built-in `keanu` entry in `avatar/scene.py` |
+
+**Models with no skeleton work too** -- a static mesh, which is what most
+mech/robot heads are. They load, sway, and nod along with his voice instead
+of lip-syncing (any `mouth` setting is replaced by `nod` for them).
+
+A folder with a broken or incomplete `avatar.json` is skipped with a printed
+reason; it never stops Johnny from starting. A model that fails to *load*
+when you press M puts the previous one back and says why on screen.
+
+Where to find models, and what each licence lets you do:
+
+- **Sketchfab** -- filter by *Downloadable* and an animated/rigged tag; download
+  the glTF. CC BY needs the credit line; CC BY-NC is fine for this personal use.
+- **Mixamo** (free Adobe account) -- characters and clips, royalty-free to use
+  but not to redistribute as raw files. FBX only: convert with Blender as in
+  "Rebuilding keanu.bam" above (`tools/fbx_to_glb.py`).
+- **VRoid Hub** -- VRM avatars (a glTF variant); each author sets their own
+  terms on the model's page. Not yet tried here -- `panda3d-gltf` may need the
+  `.vrm` renamed to `.glb`, and may ignore VRM-specific extensions.
+
+**Converting downloads.** Two tools cover what Sketchfab hands out:
+- a GLB that will not load (compressed geometry, WebP textures, several skins
+  on one skeleton, meshes beside their bones): `tools/fix_sketchfab_glb.py`,
+  after `npx -y @gltf-transform/cli@4 dequantize` if it is meshopt-compressed;
+- a visor/glass/chrome painted into a shared texture, to make mirror-like:
+  `tools/gloss_by_colour.py` (selects by colour; writes `--preview` mask);
+- a "source" zip holding `model.dae` plus loose `*_albedo/_normal/_metallic/
+  _roughness/_emissive/_AO` images: `tools/collada_to_glb.py` (needs
+  `pip install trimesh pycollada pillow`), then gltf-transform `prune`.
+
+**A CC licence is not the whole question.** CC BY covers the *modeller's*
+rights only. A model of a franchise design -- Marvel's Hulkbuster, say --
+still carries the franchise owner's rights, so it is used locally and NEVER
+committed here, whatever its Sketchfab licence says. Same for anything whose
+licence you cannot confirm. Both are what the default ignore under `extra/`
+is for.
+
+Local-only drop-ins in use (2026-10-04), not committed:
+- `hulkbuster` -- "Hulkbuster's helmet MCU version" by el_robotto, CC BY 4.0,
+  https://sketchfab.com/3d-models/hulkbusters-helmet-mcu-version-63e0d0c4b342413eaeb9528fdd851311
+  -- Marvel design, so local only. DORMANT (owner's call, 2026-10-04). Static; nods. Centred close-up
+  (`portal_framing` 1.7, `portal_rise` 0.02).
+- `spartan` -- "Spartan Armour MKV - Halo Reach" by McCarthy3D, CC BY 4.0,
+  https://sketchfab.com/3d-models/spartan-armour-mkv-halo-reach-57070b2fd9ff472c8988e76d8c5cbe66
+  -- Microsoft/343's Halo design, so local only. Converted with
+  `fix_sketchfab_glb --drop Floor_lambert2_0 --max-texture 2048`. Its clip
+  "Take 001" is NOT used: playing it balloons the arms into wings (posed
+  size x2.6 -- the export's rest and bind poses disagree and panda3d-gltf
+  applies the difference twice), so it stands in its bind pose, sways and
+  nods. Chest lights `glow` 6. Visor made gold-mirror with
+  `tools/gloss_by_colour --material Spartan_Helmet_Mat --hue 20 55 --min-sat
+  0.45 --min-val 0.2 --roughness 0.28` (its map called the visor smooth but
+  non-metal: matte orange).
+- `zbrush-mech` -- from a Sketchfab source zip named
+  "zbrush-for-concept-mech-design-dver"; author and licence NOT yet
+  confirmed, so local only until they are. Static; nods.
+
+Model size matters on the 8GB M2: Panda3D keeps every model it has loaded
+cached in memory, so cycling through several 80MB models adds up.
+

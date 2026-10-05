@@ -1,26 +1,27 @@
 """The Panda3D side of the avatar: window, model, idle motion, mouth.
 
-Two different models are supported because they move their mouths in
-completely different ways, and because only one of them may be committed.
+Models (more drop in under assets/avatar/extra/ -- see ATTRIBUTION.md):
 
-* **jonny** -- the Stuxed Sketchfab model, CC BY, in the repo. A Ready Player
-  Me export, so the mouth is a `mouthOpen` *morph target*.
-* **keanu** -- the KonnieGFX port of CD Projekt Red's actual character. Far
-  better likeness, but it is an extracted game asset and this repository is
-  public, so it is gitignored and exists only on machines that build it. It
-  carries no morph targets at all; Cyberpunk animates faces with *joints*,
-  which is why its facial rig survived extraction. The mouth is a rotation of
-  `mid_J_jaw_JNT`.
+* **mech-bust** -- "Mech bust" by Just8, CC BY 4.0, committed under
+  assets/avatar/extra/. The model from the off-axis reel, and the DEFAULT.
+  Rigged and animated; the mouth is a rotation of its `jaw_07` joint.
+* **keanu** -- the KonnieGFX port of CD Projekt Red's actual character. It
+  is an extracted game asset and this repository is public, so it is
+  gitignored and exists only on machines that build it. Its mouth is a
+  rotation of `mid_J_jaw_JNT`.
 
-The test suite can therefore only ever run against `jonny`, which is why both
-mechanisms stay supported rather than the better model simply replacing the
-other. Tests pin their model explicitly; nothing should rely on the default.
+The mech is the only rigged model a fresh clone has, so it is what the test
+suite loads. Tests pin their model explicitly; nothing should rely on the
+default. (A third, the free Sketchfab "Jonny Silverhand", was removed on
+2026-10-04 at the owner's request. It was the only morph-target mouth, so the
+`slider` driver below no longer has a committed model to test against.)
 
 Whichever mechanism is used, the mouth only moves if the character's
 `PartBundle` is told to `forceUpdate()`. Neither writing a slider nor rotating
 a controlled joint updates the vertices on its own -- both look like a silent
 no-op without it, and both wasted a debugging session that way.
 """
+import json
 import math
 import os
 import random
@@ -30,13 +31,16 @@ from avatar.blink import BlinkSchedule
 
 from direct.actor.Actor import Actor
 from direct.gui.OnscreenText import OnscreenText
-from panda3d.core import AmbientLight, DirectionalLight, TextNode, Vec4
+from panda3d.core import (AmbientLight, CardMaker, DirectionalLight, TextNode,
+                          TransparencyAttrib, Vec4)
 
 CAPTION_TOP = -0.42
 # Last row may not reach the credit band below it.
 CAPTION_FLOOR = -0.88
 
-from avatar import props
+from avatar import look
+from avatar import portal as portal_mod
+from avatar import props, stage
 
 ASSET_DIR = Path(__file__).resolve().parent.parent / "assets" / "avatar"
 
@@ -145,20 +149,12 @@ AVATARS = {
                  "pos": (0.01020, -0.01338, 0.00348), "hpr": (152.5, 90.0, -61.7),
                  "clips": ("smoking",)},
     },
-    "jonny": {
-        "bam": "jonny_fixed.bam",
-        "head_mesh": "Wolf3D_Head",
-        # A Ready Player Me skeleton: none of the joints above exist on it, so
-        # it degrades to the whole-actor sway and nothing is driven per-joint.
-        "idle": (),
-        "sway": 12.0,
-        "credit": 'Model: "Jonny Silverhand" by Stuxed (CC BY)',
-        "mouth": {"kind": "slider", "slider": "mouthOpen", "gain": 1.0},
-    },
 }
 
-# Best-looking first. `MAVIS_AVATAR` overrides; tests pass a name directly.
-PREFERENCE = ("keanu", "jonny")
+# The default first, then the rest in switching order. `MAVIS_AVATAR`
+# overrides; tests pass a name directly. mech-bust is a drop-in (it lives in
+# extra/ with its avatar.json) but it is committed, so it is always present.
+PREFERENCE = ("mech-bust", "keanu")
 
 HEAD_FRACTION = 0.19
 # How much of the view the head spans: the framed height is this many head
@@ -177,25 +173,121 @@ FRAMING = 3.05
 # on the torso instead. 0.5 would put the head's centre at the very top edge.
 HEAD_RISE = 0.31
 DEFAULT_FOV = 30.0
+# Portal mode: how far behind the glass his head sits, metres. Deep enough
+# that leaning visibly uncovers the side walls, shallow enough that the head
+# still fills the window from a normal sitting distance.
+PORTAL_DEPTH = 0.18
+# Breathing for models with no working clip (portal mode): a slow vertical
+# rise and fall of this fraction of the visible height, over BREATH_PERIOD
+# seconds -- about a resting human breath. Without it a static model hangs
+# like a museum piece; the mech's own clip already breathes, so it is skipped.
+BREATH_DEPTH = 0.006
+BREATH_PERIOD = 4.2
+# simplepbr exposure in stops, portal mode only.
+PORTAL_EXPOSURE = 0.35
+# Head heights the window spans from the nominal eye. Tighter than the
+# overlay's torso portrait (FRAMING): the reel's subject is big and close,
+# cropped by the screen's edges, and a large subject near the glass is what
+# makes the window read as a window rather than a diorama.
+PORTAL_FRAMING = 2.1
+# HEAD_RISE's portal counterpart. At this tighter framing the overlay's 0.31
+# pushes the crown off the top edge, and 0.24 still clipped it by 1.3mm
+# (test_head_is_visible_through_the_window_from_the_nominal_eye); this leaves
+# a sliver of wall above him.
+PORTAL_RISE = 0.21
 
 
-def choose_avatar() -> str:
+EXTRA_DIR = ASSET_DIR / "extra"
+# What a drop-in model's avatar.json may say. Only `model` and `credit` are
+# required; see assets/avatar/ATTRIBUTION.md, "Adding your own models".
+_EXTRA_KEYS = {"model", "credit", "head_mesh", "head_fraction", "mouth",
+               "idle_anim", "anims", "idle_variety", "poses", "sway",
+               "portal_framing", "portal_rise", "dormant", "glow"}
+
+
+def _read_extra(folder: Path):
+    """Config for one drop-in model folder, or None (with a reason printed).
+
+    A bad folder must not take the avatar down -- it is skipped and named, so
+    one half-copied download cannot cost you Johnny.
+    """
+    spec_path = folder / "avatar.json"
+    try:
+        spec = json.loads(spec_path.read_text())
+    except (OSError, ValueError) as exc:
+        print(f"skipping model {folder.name}: unreadable avatar.json ({exc})")
+        return None
+    unknown = set(spec) - _EXTRA_KEYS
+    missing = {"model", "credit"} - set(spec)
+    if missing or unknown:
+        print(f"skipping model {folder.name}: missing {sorted(missing)}, "
+              f"unknown {sorted(unknown)}")
+        return None
+    path = folder / spec["model"]
+    if not path.exists():
+        print(f"skipping model {folder.name}: no {path.name}")
+        return None
+    config = {k: v for k, v in spec.items() if k != "model"}
+    config["path"] = str(path)
+    # A model with no mouth config still talks -- it just doesn't move its
+    # mouth. Better than refusing a model that has no morphs or jaw.
+    config.setdefault("mouth", {"kind": "none"})
+    config["sway"] = float(config.get("sway", 3.0))
+    if "anims" in config:
+        config["anims"] = tuple(config["anims"])
+    if "idle_variety" in config:
+        config["idle_variety"] = tuple(config["idle_variety"])
+    return config
+
+
+def all_avatars(extra_dir: Path = None) -> dict:
+    """Built-in AVATARS plus every valid folder under assets/avatar/extra/."""
+    found = dict(AVATARS)
+    folder = EXTRA_DIR if extra_dir is None else Path(extra_dir)
+    if folder.is_dir():
+        for sub in sorted(p for p in folder.iterdir() if p.is_dir()):
+            if sub.name in found:
+                print(f"skipping model {sub.name}: name taken by a built-in")
+                continue
+            config = _read_extra(sub)
+            if config is not None:
+                found[sub.name] = config
+    return found
+
+
+def model_path(config) -> Path:
+    return Path(config["path"]) if "path" in config else ASSET_DIR / config["bam"]
+
+
+def available_avatars(registry: dict = None) -> list:
+    """Names whose model file exists, in switching order: built-ins best
+    first, then drop-ins alphabetically."""
+    registry = all_avatars() if registry is None else registry
+    ordered = [n for n in PREFERENCE if n in registry]
+    ordered += sorted(n for n in registry if n not in PREFERENCE)
+    # Dormant models stay on disk and stay loadable by name (MAVIS_AVATAR),
+    # but are never the default and never come up on M.
+    return [n for n in ordered if model_path(registry[n]).exists()
+            and not registry[n].get("dormant")]
+
+
+def choose_avatar(registry: dict = None) -> str:
     """Name of the avatar to load: env override, else the best one built."""
+    registry = all_avatars() if registry is None else registry
     requested = os.environ.get("MAVIS_AVATAR")
     if requested:
-        if requested not in AVATARS:
+        if requested not in registry:
             raise ValueError(
-                f"MAVIS_AVATAR={requested!r} is not one of {sorted(AVATARS)}"
+                f"MAVIS_AVATAR={requested!r} is not one of {sorted(registry)}"
             )
         return requested
-    for name in PREFERENCE:
-        if (ASSET_DIR / AVATARS[name]["bam"]).exists():
-            return name
-    return PREFERENCE[-1]
+    built = available_avatars(registry)
+    return built[0] if built else PREFERENCE[0]
 
 
-def load_actor(loader, name: str) -> Actor:
-    path = ASSET_DIR / AVATARS[name]["bam"]
+def load_actor(loader, name: str, registry: dict = None) -> Actor:
+    registry = AVATARS if registry is None else registry
+    path = model_path(registry[name])
     if not path.exists():
         raise FileNotFoundError(
             f"avatar model {name!r} missing at {path} -- see "
@@ -260,7 +352,36 @@ class _JawMouth:
         self._bundle.forceUpdate()
 
 
-_DRIVERS = {"slider": _SliderMouth, "joint": _JawMouth}
+class _NoMouth:
+    """For a drop-in model with neither morphs nor a known jaw joint."""
+
+    def __init__(self, actor, bundle, config):
+        self.sliders = []
+
+    def set(self, amount: float) -> None:
+        pass
+
+
+class _NodMouth:
+    """For a model with NO skeleton -- a static mesh, like a mech head.
+
+    There is nothing to open, so speech becomes a small nod of the whole
+    model in time with the voice. A head that stays dead still while words
+    come out reads as a speaker grille; one that dips with the syllables
+    reads as the one talking.
+    """
+
+    def __init__(self, actor, bundle, config):
+        self._actor = actor
+        self._degrees = config.get("degrees", 3.0)
+        self.sliders = []
+
+    def set(self, amount: float) -> None:
+        self._actor.set_p(max(0.0, min(1.0, amount)) * self._degrees)
+
+
+_DRIVERS = {"slider": _SliderMouth, "joint": _JawMouth, "none": _NoMouth,
+            "nod": _NodMouth}
 
 
 class _Brows:
@@ -373,6 +494,11 @@ class _IdleMotion:
         controlled = {}
 
         for name, axis, degrees, period, phase in channels:
+            if name not in controlled and bundle.find_child(name) is None:
+                # controlJoint does NOT fail on a missing joint: it hands
+                # back a fresh dummy node, so checking its result (as this
+                # once did) let every absent joint through as "driven".
+                controlled[name] = None
             if name not in controlled:
                 node = actor.controlJoint(None, "modelRoot", name)
                 controlled[name] = (
@@ -401,24 +527,105 @@ class _IdleMotion:
         self._bundle.forceUpdate()
 
 
+class _Flash:
+    """A cut to black that fades out over a swap, portal mode only.
+
+    The swap itself is instant, so without it one model simply replaces
+    another between two frames -- it reads as a glitch, not a transition.
+    """
+
+    LENGTH = 0.45
+
+    def __init__(self, render2d):
+        cm = CardMaker("mavis-flash")
+        cm.set_frame(-1, 1, -1, 1)
+        self.card = render2d.attach_new_node(cm.generate())
+        self.card.set_bin("background", 20)    # over the film, under text
+        self.card.set_transparency(TransparencyAttrib.M_alpha)
+        self.card.set_depth_test(False)
+        self.card.set_depth_write(False)
+        self.card.set_color(0, 0, 0, 0)
+        self._started = None
+
+    def fire(self, now: float) -> None:
+        self._started = now
+        self.card.set_color(0, 0, 0, 1)
+
+    def step(self, now: float) -> None:
+        if self._started is None:
+            return
+        k = (now - self._started) / self.LENGTH
+        if k >= 1.0:
+            self._started = None
+            self.card.set_color(0, 0, 0, 0)
+            return
+        self.card.set_color(0, 0, 0, (1.0 - k) ** 2)
+
+
 class AvatarScene:
     """Owns the avatar's visual state. Knows nothing about audio."""
 
-    def __init__(self, show_base, avatar: str = None):
+    def __init__(self, show_base, avatar: str = None, portal=None,
+                 registry: dict = None):
+        """`portal` is a `portal.Screen` to stand him behind the glass, or None
+        for the original transparent desktop overlay -- which is unchanged.
+        `registry` defaults to the built-ins plus assets/avatar/extra/."""
         self.base = show_base
-        self.name = avatar or choose_avatar()
-        self.config = AVATARS[self.name]
+        self.registry = all_avatars() if registry is None else registry
+        self.portal = portal
+        self.room = None
+        self.pivot = None
+        self.lights = []
+        self.film = None
+        self.flash = None
+        self.bloom = None
+        self.gaze = 0.0
+        self.gaze_p = 0.0
+        self.actor = None
+        self.visible = True
 
+        # Once per window: the shader pipeline, the camera, the overlay's
+        # lights, the film finish. Everything per-MODEL is in _build, so that
+        # swap() can tear one model down and stand the next one up.
         self._init_shader()
-        self.actor = load_actor(show_base.loader, self.name)
-        self.actor.reparent_to(show_base.render)
+        self._release_camera()
+        if portal is None:
+            self._light()
+        else:
+            self.film = stage.FilmFinish(self.base.render2d)
+            self.flash = _Flash(self.base.render2d)
+        # mayChange=True keeps a live TextNode. The default flattens the text
+        # into a bare PandaNode, after which the credit can no longer be read
+        # back off the node -- and this credit is an attribution condition, so
+        # it has to stay verifiable.
+        self.credit = OnscreenText(
+            text="", pos=(0.0, -0.95), scale=0.04,
+            fg=(0.8, 0.8, 0.85, 1.0), align=TextNode.ACenter, mayChange=True,
+        )
+        self._build(avatar or choose_avatar(self.registry))
 
-        character = self.actor.find("**/+Character").node()
-        self._character = character
-        self._bundle = character.getBundle(0)
+    def _build(self, name: str) -> None:
+        """Load model `name` and set up everything that depends on it."""
+        self.name = name
+        self.config = self.registry[name]
+        self.actor = load_actor(self.base.loader, name, self.registry)
+        self.actor.reparent_to(self.base.render)
 
-        self.mouth = _DRIVERS[self.config["mouth"]["kind"]](
-            self.actor, self._bundle, self.config["mouth"]
+        character = self.actor.find("**/+Character")
+        mouth_config = self.config["mouth"]
+        if character.is_empty():
+            # A static mesh (no skeleton): nothing to animate or open. It
+            # still loads, sways and nods along when he speaks.
+            self._character = None
+            self._bundle = None
+            if mouth_config.get("kind") != "nod":
+                mouth_config = {"kind": "nod"}
+        else:
+            self._character = character.node()
+            self._bundle = self._character.getBundle(0)
+
+        self.mouth = _DRIVERS[mouth_config["kind"]](
+            self.actor, self._bundle, mouth_config
         )
         self.mouth_sliders = self.mouth.sliders
 
@@ -457,9 +664,12 @@ class AvatarScene:
         self.brows = _Brows(self.actor, self._bundle, brows) if brows else None
 
         self.prop = self._attach_prop()
+        self._boost_emission(float(self.config.get("glow", 1.0)))
 
-        self._release_camera()
-        self._frame_head()
+        if self.portal is None:
+            self._frame_head()
+        else:
+            self._place_in_portal()
 
         if self.animated:
             # No set_control_effect here on purpose: loop() already leaves the
@@ -469,17 +679,13 @@ class AvatarScene:
             # _begin_fade's job.
             self.actor.loop(self.config["idle_anim"])
             self._looping = self.config["idle_anim"]
-        self._light()
-        # mayChange=True keeps a live TextNode. The default flattens the text
-        # into a bare PandaNode, after which the credit can no longer be read
-        # back off the node -- and this credit is an attribution condition, so
-        # it has to stay verifiable.
-        self.credit = OnscreenText(
-            text=self.config["credit"], pos=(0.0, -0.95), scale=0.04,
-            fg=(0.8, 0.8, 0.85, 1.0), align=TextNode.ACenter, mayChange=True,
-        )
-        self._t = 0.0
-        self._clip_start = 0.0
+        if self.portal is not None:
+            self.lights = stage.light_room(self.base.render, self.pivot,
+                                           self.portal, self.room_depth)
+            self.look_from(self.portal.nominal_eye)
+        self.credit.setText(self.config["credit"])
+        self._t = getattr(self, "_t", 0.0)
+        self._clip_start = self._t
         self._pending = None        # (name, loop) deferred by MIN_DWELL
         self._fade = None           # (from, to, started, loop) while blending
         self._oneshot = None        # a non-looping clip holding the screen
@@ -492,7 +698,77 @@ class AvatarScene:
             # Actor is a Python class, not a C++ binding, so it gets none of
             # the snake_case aliasing the rest of Panda3D has.
             self.actor.setBlend(animBlend=True)
-        self.visible = True
+        if not self.visible:
+            self.actor.hide()
+
+    def _boost_emission(self, factor: float) -> None:
+        """Multiply every glowing material's emission by `factor`.
+
+        glTF's KHR_materials_emissive_strength (how the mech's eye-lights are
+        made bright) is ignored by panda3d-gltf, so they arrive at strength 1:
+        lit, but too dim to pass the glow's threshold. Materials are REPLACED
+        with boosted copies on this actor only -- the loaded originals are
+        shared through Panda3D's model cache, so editing them in place would
+        compound on every swap back to the model.
+        """
+        if factor == 1.0:
+            return
+        from panda3d.core import Material
+        for mat in self.actor.find_all_materials():
+            e = mat.get_emission()
+            if not mat.has_emission() or max(e[0], e[1], e[2]) <= 0:
+                continue
+            boosted = Material(mat)
+            boosted.set_emission(mat.get_emission() * factor)
+            self.actor.replace_material(mat, boosted)
+
+    def _teardown(self) -> None:
+        """Remove the current model and everything built around it."""
+        for light in self.lights:
+            self.base.render.clear_light(light)
+            light.remove_node()
+        self.lights = []
+        if self.room is not None:
+            self.room.remove_node()
+            self.room = None
+        # The prop and the controlled joints all hang under the actor, so
+        # removing it takes them too. cleanup() frees the animation bundles;
+        # remove_node() alone leaves them alive and leaks a model per swap.
+        self.actor.cleanup()
+        self.actor.remove_node()
+        if self.pivot is not None:
+            self.pivot.remove_node()
+            self.pivot = None
+        self.prop = None
+
+    def next_avatar(self):
+        """The model after this one in the switching order, or None if this
+        is the only one built."""
+        built = available_avatars(self.registry)
+        if self.name not in built:
+            # Started on a dormant model (by name): M moves to an awake one.
+            return built[0] if built else None
+        if len(built) < 2:
+            return None
+        return built[(built.index(self.name) + 1) % len(built)]
+
+    def swap(self, name: str) -> None:
+        """Replace the model with `name`, keeping window, camera and state.
+
+        On failure the PREVIOUS model is restored and the error re-raised, so
+        a broken drop-in costs one notice, not Johnny.
+        """
+        previous = self.name
+        self._teardown()
+        try:
+            self._build(name)
+        except Exception:
+            if self.actor is not None and not self.actor.is_empty():
+                self._teardown()
+            self._build(previous)
+            raise
+        if self.flash is not None:
+            self.flash.fire(self._t)
 
     def _init_shader(self):
         """Install the PBR shader the glTF materials are written against.
@@ -514,12 +790,46 @@ class AvatarScene:
         existing = getattr(self.base, "_mavis_pbr_pipeline", None)
         if existing is not None:
             self.pipeline = existing
+            self.bloom = getattr(self.base, "_mavis_bloom", None)
             return
 
         import simplepbr
 
-        self.pipeline = simplepbr.init(msaa_samples=0)
+        if self.portal is not None:
+            # Must precede init: it patches the shader source simplepbr is
+            # about to compile. False means simplepbr changed; it keeps its
+            # own hard shadows rather than risk a shader that will not build.
+            if not look.soften_shadows():
+                print("soft shadows unavailable: simplepbr's shadow code changed")
+            if not look.fix_lut_for_glsl120():
+                print("colour grade may not compile: simplepbr's tonemap changed")
+
+        # Shadows only behind the glass: the overlay has nothing to cast onto,
+        # and the shadow pass is a second render of the whole model.
+        # MSAA only behind the glass: a full-screen window makes jagged
+        # silhouette edges against the dark wall the first thing you notice,
+        # where the small overlay window never showed them.
+        # The grade goes in AT init: setting sdr_lut later makes simplepbr
+        # rebuild its whole post chain, orphaning the glow stages.
+        self.pipeline = simplepbr.init(msaa_samples=4 if self.portal is not None else 0,
+                                       enable_shadows=self.portal is not None,
+                                       sdr_lut=(look.grade_lut()
+                                                if self.portal is not None else None))
         self.base._mavis_pbr_pipeline = self.pipeline
+        if self.portal is not None:
+            # Something for metal to reflect. Without it PBR metal reflects
+            # black: the mech rendered as a murky silhouette. See stage.
+            self.pipeline.env_map = stage.studio_env_map()
+            # A third of a stop up: matched side by side against the reel,
+            # whose silver plates read brighter than ours did. Only a uniform,
+            # so it is safe after init (no post-chain rebuild).
+            self.pipeline.exposure = PORTAL_EXPOSURE
+            try:
+                self.bloom = look.Bloom(self.pipeline)
+            except Exception as exc:     # never lose Johnny to an effect
+                print(f"glow unavailable: {exc}")
+                self.bloom = None
+            self.base._mavis_bloom = self.bloom
 
     def _release_camera(self):
         """Take the camera away from ShowBase's default mouse trackball.
@@ -538,24 +848,26 @@ class AvatarScene:
             return
         self.base.disableMouse()
 
-    def _frame_head(self):
-        """Place the actor so the head fills the frame, from measured bounds.
+    def _measure_head(self):
+        """(center_x, center_y, center_z, head_height) in the actor's own space.
 
         Bounds are read *relative to the actor*. `get_tight_bounds()` with no
         argument reports the mesh's own untransformed space, which on a model
         carrying a scale above the meshes -- as the rescaled keanu export does
         -- is out by the scale factor and frames empty air.
-
-        The near plane is pulled in to suit the computed distance. Panda3D
-        defaults it to 1.0, and a head framed closer than that is entirely
-        clipped away, which looks exactly like a model that failed to load.
         """
-        self.actor.set_pos(0, 0, 0)
-        head = self.actor.find(f"**/{self.config['head_mesh']}")
+        head_mesh = self.config.get("head_mesh")
+        head = (self.actor.find(f"**/{head_mesh}") if head_mesh
+                else self.actor.find("**/__no_head_mesh__"))
 
         if head.is_empty():
+            # No named head mesh: assume the top HEAD_FRACTION of the model is
+            # the head. Right for a full figure, badly wrong for a BUST, which
+            # is mostly head -- framing its top 19% zooms into the helmet. A
+            # drop-in sets `head_fraction` (~0.5 for a bust) to say so.
+            fraction = float(self.config.get("head_fraction", HEAD_FRACTION))
             low, high = self.actor.get_tight_bounds()
-            head_height = max(high[2] - low[2], 1e-3) * HEAD_FRACTION
+            head_height = max(high[2] - low[2], 1e-3) * fraction
             center_z = high[2] - head_height / 2.0
         else:
             low, high = head.get_tight_bounds(self.actor)
@@ -565,6 +877,18 @@ class AvatarScene:
         # the head on the model's centreline, so framing only Z looked correct
         # until a clip shifted his weight and left him sitting off to one side.
         center_x = (low[0] + high[0]) / 2.0
+        center_y = (low[1] + high[1]) / 2.0
+        return center_x, center_y, center_z, head_height
+
+    def _frame_head(self):
+        """Place the actor so the head fills the frame, from measured bounds.
+
+        The near plane is pulled in to suit the computed distance. Panda3D
+        defaults it to 1.0, and a head framed closer than that is entirely
+        clipped away, which looks exactly like a model that failed to load.
+        """
+        self.actor.set_pos(0, 0, 0)
+        center_x, _center_y, center_z, head_height = self._measure_head()
 
         framed = head_height * FRAMING
         lens = self.base.camLens
@@ -583,6 +907,105 @@ class AvatarScene:
         for node in self.actor.findAllMatches(f"**/{lens['mesh']}"):
             if node.node().isGeomNode():
                 node.setAlphaScale(lens["alpha_scale"])
+
+
+    def _place_in_portal(self):
+        """Stand him PORTAL_DEPTH behind the glass, framed as the overlay is.
+
+        Scaled so that from the nominal eye he fills the window exactly as he
+        fills the overlay -- the same torso portrait -- and moving your head
+        then shows MORE of him and the room, never less. He hangs from a pivot
+        through his head, so turning toward the viewer turns the head in place
+        rather than swinging it round his feet.
+        """
+        screen = self.portal
+        self.actor.set_pos(0, 0, 0)
+        center_x, center_y, center_z, head_height = self._measure_head()
+
+        eye_distance = -screen.nominal_eye[1]
+        visible = screen.height * (eye_distance + PORTAL_DEPTH) / eye_distance
+        # Per model: a drop-in may frame tighter or looser than Johnny (the
+        # reel's mech is a close-up of the head, he is head and shoulders).
+        scale = visible / (head_height
+                           * float(self.config.get("portal_framing", PORTAL_FRAMING)))
+
+        self.pivot = self.base.render.attach_new_node("mavis-pivot")
+        self.pivot.set_pos(0, PORTAL_DEPTH,
+                           visible * float(self.config.get("portal_rise", PORTAL_RISE)))
+        self.actor.reparent_to(self.pivot)
+        self.actor.set_scale(scale)
+        self.actor.set_pos(-center_x * scale, -center_y * scale, -center_z * scale)
+
+        if "portal_rise" not in self.config:
+            self._keep_head_in_window(eye_distance)
+        # Where breathing bobs him from (see idle), and how far: a sliver of
+        # the window's height, felt rather than seen.
+        self._pivot_z0 = self.pivot.get_z()
+        self._breath = visible * BREATH_DEPTH
+
+        low, high = self.actor.get_tight_bounds(self.base.render)
+        self.room_depth = max(high[1], PORTAL_DEPTH) + stage.BACK_GAP
+        # The room is what the window reveals at the BACK WALL's depth from
+        # the nominal eye: sat straight on, no side wall or ceiling is in view
+        # -- just the backdrop, as in the reel -- and they swing into view
+        # only as you lean, which is when depth needs showing. (Sized to his
+        # own depth, the first version showed the walls from dead centre and
+        # read as a diorama box.)
+        reveal = (eye_distance + self.room_depth) / eye_distance
+        # The floor goes at his feet (a hair below, so soles do not z-fight)
+        # -- but never ABOVE the lowest point the window shows at the back
+        # wall from the nominal eye. A full figure's feet are always below
+        # that; a BUST's base is not, and a floor at its base filled the
+        # bottom of the window with a flat grey slab. Lower, it is out of
+        # sight and a bust floats in the dark as the reel's mech does.
+        back_reveal = (eye_distance + self.room_depth) / eye_distance
+        floor_z = min(low[2] - 0.002,
+                      -screen.height / 2.0 * back_reveal - 0.01)
+        self.room = stage.build_room(
+            self.base.render, screen, width=screen.width * reveal,
+            top=max(screen.height / 2.0 * reveal, high[2] + 0.01),
+            depth=self.room_depth, floor_z=floor_z)
+
+    def _keep_head_in_window(self, eye_distance: float, margin: float = 0.002) -> None:
+        """Lower him until the whole head is inside the glass from the nominal eye.
+
+        PORTAL_RISE places the head's CENTRE. A deep head (the mech's crest
+        reaches well forward of its centre) has its front nearer the glass,
+        where it looks bigger and higher, and poked 2.8mm out of the top.
+        Checked against every corner of the head's box. A model that sets its
+        own `portal_rise` is cropping on purpose and is left alone.
+        """
+        head_mesh = self.config.get("head_mesh")
+        head = self.actor.find(f"**/{head_mesh}") if head_mesh else self.actor
+        low, high = head.get_tight_bounds(self.base.render)
+        top = self.portal.height / 2.0 - margin
+        worst = 0.0
+        for y in (low[1], high[1]):
+            if y <= 0:
+                continue
+            # Where the ray from the eye to the head's top edge crosses the glass.
+            at_glass = high[2] * eye_distance / (y + eye_distance)
+            if at_glass > top:
+                # Drop needed at this depth to bring that edge onto the line.
+                worst = max(worst, (at_glass - top) * (y + eye_distance) / eye_distance)
+        if worst:
+            self.pivot.set_z(self.pivot.get_z() - worst)
+
+    def look_from(self, eye) -> None:
+        """Redraw the window as seen from `eye` (portal frame, metres).
+
+        Call every frame with the tracked eye. Also turns him a few degrees to
+        face it; `idle` applies the turn so it composes with his sway.
+        """
+        if self.portal is None:
+            return
+        self.gaze = portal_mod.gaze_heading(eye, PORTAL_DEPTH)
+        if self.pivot is not None:
+            self.gaze_p = portal_mod.gaze_pitch(eye, PORTAL_DEPTH, self.pivot.get_z())
+        if self.base.camLens is None:
+            return
+        portal_mod.apply_off_axis(self.base.camera, self.base.camLens, eye,
+                                  self.portal)
 
     def _light(self):
         key = DirectionalLight("key")
@@ -619,8 +1042,24 @@ class AvatarScene:
             self.actor.set_h(math.sin(elapsed * SWAY_RATE)
                              * self.config.get("sway", 12.0))
             self.motion.apply(elapsed)
-            return
-        self._advance_blend(elapsed)
+        else:
+            self._advance_blend(elapsed)
+        if self.pivot is not None:
+            # Eased, not set: the tracked eye already arrives smoothed, but a
+            # head that turns at camera rate still reads as mechanical.
+            current = self.pivot.get_h()
+            self.pivot.set_h(current + (self.gaze - current) * 0.08)
+            pitch = self.pivot.get_p()
+            self.pivot.set_p(pitch + (self.gaze_p - pitch) * 0.08)
+            if not self.animated:
+                self.pivot.set_z(self._pivot_z0 + self._breath * math.sin(
+                    2.0 * math.pi * elapsed / BREATH_PERIOD))
+        if self.film is not None:
+            self.film.step()
+        if self.flash is not None:
+            self.flash.step(elapsed)
+        if self.bloom is not None:
+            self.bloom.step()
 
     def play(self, name: str, loop: bool = True) -> bool:
         """Switch to another clip, e.g. "smoking". False if it has none.
@@ -749,7 +1188,7 @@ class AvatarScene:
         # exposeJoint returns a fresh node whether or not the joint exists --
         # on a miss it only warns, and the prop would hang motionless at the
         # actor's origin, in frame. Ask the bundle directly instead.
-        if self._bundle.find_child(config["joint"]) is None:
+        if self._bundle is None or self._bundle.find_child(config["joint"]) is None:
             return None
         hand = self.actor.expose_joint(None, "modelRoot", config["joint"])
         if hand is None or hand.is_empty():
@@ -780,6 +1219,24 @@ class AvatarScene:
                 text="", pos=(0.0, 0.88), scale=0.05,
                 fg=(1.0, 0.6, 0.3, 1.0), align=TextNode.ACenter, mayChange=True)
         self._notice.setText(text)
+
+    def show_hud(self, text: str) -> None:
+        """A dim status line pinned to the glass, top-left. "" clears.
+
+        Portal mode only, and not decoration: the reel's flat UI sitting ON
+        the screen plane is half of why the scene behind it reads as deep --
+        it gives the eye a fixed surface to measure the room against. It also
+        reports what the tracker sees, which is how the screen size and
+        webcam field of view get calibrated by eye.
+        """
+        if getattr(self, "_hud", None) is None:
+            # Anchored to the window's top-left corner, so it stays in the
+            # corner whatever the display's aspect ratio.
+            self._hud = OnscreenText(
+                text="", parent=self.base.a2dTopLeft, pos=(0.05, -0.08),
+                scale=0.032, fg=(0.85, 0.22, 0.2, 0.75), align=TextNode.ALeft,
+                mayChange=True)
+        self._hud.setText(text)
 
     def show_caption(self, text: str) -> None:
         """His answer, rendered so it reads with the sound off. "" clears.

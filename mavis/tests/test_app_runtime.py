@@ -12,8 +12,14 @@ from avatar import app as app_mod
 
 
 class StubTaskMgr:
+    def __init__(self):
+        self.later = []
+
     def add(self, *a, **k):
         pass
+
+    def doMethodLater(self, delay, fn, name, extraArgs=()):
+        self.later.append((fn, list(extraArgs)))
 
 
 class StubBase:
@@ -363,3 +369,139 @@ def test_an_answer_that_breaks_off_plays_what_it_had_then_reports(monkeypatch):
     assert played == ["greeting.wav", "speech-0.wav", "bye.wav"]
     assert machine.events == ["answer_ready", "failure: Groq error 503", "sleep"]
     assert scene.captions[-1] == ""             # the caption is cleared either way
+
+
+class PortalScene(CaptionScene):
+    def __init__(self):
+        super().__init__()
+        from avatar import portal
+        self.portal = portal.Screen()
+        self.views = []
+        self.notices = []
+
+    def idle(self, t):
+        pass
+
+    def look_from(self, eye):
+        self.views.append(eye)
+
+    def show_notice(self, text):
+        self.notices.append(text)
+
+    def show_hud(self, text):
+        pass
+
+
+class StubTracker:
+    def __init__(self, reading=(None, None), error=None):
+        self.reading = reading
+        self.error = error
+
+    def latest(self):
+        return self.reading
+
+
+def test_portal_runtime_feeds_the_tracked_eye_to_the_lens():
+    scene = PortalScene()
+    tracker = StubTracker(((0.1, -0.5, 0.02), 1.0))
+    rt = app_mod.Runtime(StubBase(), scene, machine=object(), tracker=tracker)
+    assert "t" in rt.base.accepted
+    rt._follow_eye()
+    assert scene.views[-1] == (0.1, -0.5, 0.02)
+
+
+def test_portal_runtime_says_why_tracking_is_off_once():
+    scene = PortalScene()
+    rt = app_mod.Runtime(StubBase(), scene, machine=object(),
+                         tracker=StubTracker(error="head tracking off: no camera"))
+    rt._follow_eye()
+    rt._follow_eye()
+    assert scene.notices == ["head tracking off: no camera"]
+    assert scene.views[-1] == scene.portal.nominal_eye
+
+
+def test_pausing_tracking_recentres_and_says_so():
+    scene = PortalScene()
+    tracker = StubTracker(((0.1, -0.5, 0.02), 1.0))
+    rt = app_mod.Runtime(StubBase(), scene, machine=object(), tracker=tracker)
+    rt._follow_eye()
+    rt._toggle_tracking()
+    assert scene.notices[-1] == "head tracking paused (T)"
+    rt._toggle_tracking()
+    assert scene.notices[-1] == ""
+
+
+def test_overlay_runtime_has_no_tracking_key():
+    rt = _runtime()
+    assert "t" not in rt.base.accepted
+
+
+def test_portal_requested_reads_the_env():
+    assert app_mod.portal_requested({"MAVIS_PORTAL": "1"})
+    assert not app_mod.portal_requested({"MAVIS_PORTAL": "0"})
+    assert not app_mod.portal_requested({})
+
+
+def test_hud_reports_what_the_tracker_sees():
+    scene = PortalScene()
+    scene.huds = []
+    scene.show_hud = scene.huds.append      # instance attr shadows the stub
+    tracker = StubTracker(((0.1, -0.5, 0.02), 1.0))
+    tracker.fps = 29.6
+    rt = app_mod.Runtime(StubBase(), scene, machine=object(), tracker=tracker)
+    rt._follow_eye()
+    assert scene.huds[-1].startswith("JOHNNY // LOCKED")
+    assert "eye 0.50m" in scene.huds[-1] and "cam 30fps" in scene.huds[-1]
+    assert "SEARCHING" in rt.hud_text(None, (0, -0.6, 0))
+    rt._tracking = False
+    assert "PAUSED" in rt.hud_text(None, (0, -0.6, 0))
+
+
+class SwapScene(PortalScene):
+    def __init__(self, upcoming, fail=False):
+        super().__init__()
+        self.upcoming = upcoming
+        self.fail = fail
+        self.swapped = []
+        self._t = 0.0
+        self.flash = None
+
+    def next_avatar(self):
+        return self.upcoming
+
+    def swap(self, name):
+        if self.fail:
+            raise RuntimeError("bad model")
+        self.swapped.append(name)
+
+
+def test_m_switches_on_a_later_frame_not_in_the_handler():
+    scene = SwapScene("keanu")
+    rt = app_mod.Runtime(StubBase(), scene, machine=object())
+    assert "m" in rt.base.accepted
+    rt._next_model()
+    assert scene.swapped == [] and scene.notices[-1] == "// switching to keanu"
+    rt._next_model()                        # mashing M queues nothing extra
+    assert len(rt.base.taskMgr.later) == 1
+    fn, args = rt.base.taskMgr.later[0]
+    fn(*args)
+    assert scene.swapped == ["keanu"] and scene.notices[-1] == ""
+    assert not rt._swapping
+
+
+def test_m_with_one_model_says_how_to_add_more():
+    scene = SwapScene(None)
+    rt = app_mod.Runtime(StubBase(), scene, machine=object())
+    rt._next_model()
+    assert "assets/avatar/extra" in scene.notices[-1]
+    assert rt.base.taskMgr.later == []
+
+
+def test_a_failed_switch_is_reported_and_unlocks():
+    scene = SwapScene("junk", fail=True)
+    rt = app_mod.Runtime(StubBase(), scene, machine=object())
+    rt._next_model()
+    fn, args = rt.base.taskMgr.later[0]
+    fn(*args)
+    assert scene.notices[-1].startswith("couldn't load junk")
+    assert not rt._swapping
