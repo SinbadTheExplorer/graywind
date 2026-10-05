@@ -20,7 +20,7 @@ Every shader here goes through simplepbr's loader with its defines, so the
 GLSL 120 written below is rewritten to 330 on a core-profile context (macOS)
 exactly as simplepbr's own shaders are.
 """
-from panda3d.core import Texture
+from panda3d.core import FrameBufferProperties, Texture
 
 # Shadow softness: Poisson-disc radius in shadow-map UV units. At the 2048px
 # map in stage.light_room, 0.0025 is ~5 texels: soft enough to lose the
@@ -162,11 +162,20 @@ class Bloom:
         _register("mavis_bright.frag", _BRIGHT)
         _register("mavis_blur.frag", _BLUR)
 
+        # Ask for the float buffer outright, as simplepbr does for its own.
+        # Left to FilterManager's default (8-bit RGB) the float texture does
+        # not match its buffer: Mesa let that pass, macOS rejects every glow
+        # buffer as incomplete and errors each frame -- a blank, stuttering
+        # window.
+        fbprops = FrameBufferProperties()
+        fbprops.float_color = True
+        fbprops.set_rgba_bits(16, 16, 16, 16)
+
         def stage(name, frag, src, div):
             tex = Texture(name)
             tex.set_format(Texture.F_rgba16)
             tex.set_component_type(Texture.T_float)
-            quad = fm.render_quad_into(name, colortex=tex, div=div)
+            quad = fm.render_quad_into(name, colortex=tex, div=div, fbprops=fbprops)
             if quad is None:
                 raise RuntimeError(f"bloom: could not create the {name} buffer")
             quad.set_shader(su.make_shader(name, "post.vert", frag, defines))
