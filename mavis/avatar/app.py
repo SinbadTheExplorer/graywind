@@ -488,6 +488,11 @@ def main() -> int:
         # window sizes are in points and it was never judged for sharpness.
         from panda3d.core import loadPrcFileData
         loadPrcFileData("mavis-portal", "dpi-aware #t")
+        # 30fps, not 60: at Retina resolution every frame is 5.6M pixels of
+        # PBR, shadows and glow, and the owner found the GPU load
+        # embarrassing. A figure that mostly holds still loses nothing
+        # visible at 30; the GPU does half the work.
+        loadPrcFileData("mavis-portal-fps", "clock-mode limited\nclock-frame-rate 30")
     base = ShowBase()
     chrome = WindowProperties()
     if screen is None:
