@@ -156,3 +156,16 @@ def test_no_side_wall_or_ceiling_is_in_view_from_straight_on(avatar):
     reach_z = SCREEN.height / 2 * (eye_d + back) / eye_d
     assert high[0] >= reach_x - 1e-4 and -low[0] >= reach_x - 1e-4
     assert high[2] >= reach_z - 1e-4
+
+
+def test_asleep_behind_the_glass_he_stays_in_view(avatar):
+    """The overlay vanishes while he sleeps; the portal must not. Behind the
+    glass the window is the room he stands in, so hiding him left a blank
+    room until W -- the first live test saw no model at all."""
+    avatar.show_caption("still here")
+    avatar.hide()
+    assert not avatar.actor.is_hidden() and not avatar.credit.isHidden()
+    assert avatar._caption.isHidden()
+    avatar.swap(avatar.name)                # a model switched in while asleep
+    assert not avatar.actor.is_hidden()
+    avatar.show()

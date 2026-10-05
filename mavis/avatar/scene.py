@@ -698,7 +698,7 @@ class AvatarScene:
             # Actor is a Python class, not a C++ binding, so it gets none of
             # the snake_case aliasing the rest of Panda3D has.
             self.actor.setBlend(animBlend=True)
-        if not self.visible:
+        if not self.visible and self.portal is None:
             self.actor.hide()
 
     def _boost_emission(self, factor: float) -> None:
@@ -1277,8 +1277,11 @@ class AvatarScene:
         self.visible = True
 
     def hide(self) -> None:
-        self.actor.hide()
-        self.credit.hide()
+        # Behind the glass he stays in his room while asleep, as the reel's
+        # mech does; only the overlay vanishes into the desktop.
+        if self.portal is None:
+            self.actor.hide()
+            self.credit.hide()
         # The notice lives in aspect2d, so hiding the actor leaves it floating
         # over the bare desktop now that the window is transparent.
         if getattr(self, "_notice", None) is not None:
