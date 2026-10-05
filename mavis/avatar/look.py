@@ -258,12 +258,12 @@ def grade_lut(size: int = LUT_SIZE) -> Texture:
     b, g, r = np.meshgrid(axis, axis, axis, indexing="ij")   # z=blue, y=green, x=red
     rgb = np.stack([r, g, b], axis=-1)
 
-    # S-curve: 45% of the way to smoothstep. Deeper shadows, brighter highs.
+    # S-curve: 25% of the way to smoothstep. Punch without crushing the
+    # model's dark plates into black (45% hid their detail).
     s_curve = rgb * rgb * (3.0 - 2.0 * rgb)
-    rgb = rgb + 0.45 * (s_curve - rgb)
+    rgb = rgb + 0.25 * (s_curve - rgb)
     luma = (rgb @ np.array([0.2126, 0.7152, 0.0722], dtype=np.float32))[..., None]
-    # Hold saturation back 12%.
-    rgb = luma + 0.88 * (rgb - luma)
+    # Full saturation: holding it back 12% dulled the reds the mech is about.
     # Split tone: navy into the shadows, warmth into the highlights.
     shadow = (1.0 - luma) ** 2
     rgb = rgb + shadow * np.array([-0.004, 0.0, 0.012], dtype=np.float32)

@@ -34,7 +34,10 @@ def test_mech_loads_all_meshes_rigged_and_animated(mech):
     """Before tools/fix_sketchfab_glb it loaded ZERO meshes (they sat beside
     the skeleton) or died with KeyError (five skins on one root)."""
     assert mech.actor.find_all_matches("**/+GeomNode").get_num_paths() == 5
-    assert mech.animated and mech.actor.get_anim_names() == ["anim"]
+    assert mech.actor.get_anim_names() == ["anim"]
+    # Behind the glass it holds the clip's first frame (portal_still): the
+    # clip swings the head far enough to take its eyes out past the frame.
+    assert not mech.animated
     assert type(mech.mouth).__name__ == "_JawMouth"
 
 
@@ -60,5 +63,7 @@ def test_studio_env_map_is_lit_from_above():
 
 
 def test_portal_framing_is_per_model(mech):
-    assert mech.config["portal_framing"] == 1.15     # the reel's close-up
+    # The largest close-up that keeps its eyes inside the glass from every
+    # seat (tests/test_portal_eyes_in_view.py); 1.15 cut them off live.
+    assert mech.config["portal_framing"] == 1.45
     assert scene._EXTRA_KEYS >= {"portal_framing", "portal_rise"}

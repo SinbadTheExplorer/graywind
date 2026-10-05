@@ -202,7 +202,7 @@ EXTRA_DIR = ASSET_DIR / "extra"
 # required; see assets/avatar/ATTRIBUTION.md, "Adding your own models".
 _EXTRA_KEYS = {"model", "credit", "head_mesh", "head_fraction", "mouth",
                "idle_anim", "anims", "idle_variety", "poses", "sway",
-               "portal_framing", "portal_rise", "dormant", "glow"}
+               "portal_framing", "portal_rise", "portal_still", "dormant", "glow"}
 
 
 def _read_extra(folder: Path):
@@ -658,6 +658,11 @@ class AvatarScene:
             # display him animated, leaving him sitting off-centre.
             self.actor.pose(self.config["idle_anim"], 0)
             self._bundle.forceUpdate()
+        if self.portal is not None and self.config.get("portal_still"):
+            # Held on the clip's first frame behind the glass. The mech's clip
+            # swings its head well off-axis, which took its eyes out past the
+            # frame; the reel's mech holds still and only turns to the viewer.
+            self.animated = False
 
         # After the idle pose, so "up" is measured with the head upright.
         brows = self.config.get("brows")

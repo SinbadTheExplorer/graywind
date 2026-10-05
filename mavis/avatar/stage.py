@@ -38,7 +38,7 @@ BACK_GAP = 0.20
 # One repeat of the concrete texture, metres.
 TILE = 0.75
 # Concrete: dark blue-grey, the reel's wall. Values are albedo, before light.
-CONCRETE_RGB = (0.042, 0.052, 0.085)
+CONCRETE_RGB = (0.028, 0.035, 0.057)   # darkened as the key rose, so the wall holds
 RIM_RGB = (0.45, 0.04, 0.03)         # the reel's red: an EDGE, never a wash
 COOL_RIM_RGB = (0.25, 0.35, 0.6)
 
@@ -134,7 +134,7 @@ def light_room(render, target: NodePath, screen, depth: float):
     head = target.get_pos(render)
 
     key = Spotlight("portal-key")
-    key.set_color(Vec4(4.4, 4.3, 4.15, 1))
+    key.set_color(Vec4(6.6, 6.45, 6.2, 1))      # 1.5x: the reel's mech is lit bright
     key.set_shadow_caster(True, 2048, 2048)
     # Wide enough that the cone's EDGE never shows. simplepbr ignores the
     # spot exponent and cuts the cone off hard, so a tight cone drew a crisp
@@ -254,8 +254,11 @@ class FilmFinish:
     simplepbr owns the post-process chain and a second filter would fight it.
     """
 
-    GRAIN_ALPHA = 0.07
-    VIGNETTE_ALPHA = 0.92
+    # Owner, 2026-10-04: "the source was way better". Grain read as noise over
+    # the model's own surface detail and the heavy vignette as murk, so the
+    # grain is off and the vignette only shades the far corners.
+    GRAIN_ALPHA = 0.0
+    VIGNETTE_ALPHA = 0.55
 
     def __init__(self, render2d, seed: int = 11):
         self._rng = random.Random(seed)

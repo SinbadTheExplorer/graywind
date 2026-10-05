@@ -127,7 +127,8 @@ def test_a_model_without_a_clip_breathes_and_an_animated_one_does_not(base):
     path = str(scene.EXTRA_DIR / "mech-bust" / "mech_bust.glb")
     reg = {"still": {"path": path, "credit": "x", "mouth": {"kind": "none"},
                      "head_mesh": "mech_mech_head_mat_0"},
-           "mech-bust": scene.all_avatars()["mech-bust"]}
+           "mech-bust": {k: v for k, v in scene.all_avatars()["mech-bust"].items()
+                         if k != "portal_still"}}
     sc = scene.AvatarScene(base, "still", portal=portal.Screen(), registry=reg)
     assert not sc.animated
     zs = []
