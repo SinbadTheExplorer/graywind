@@ -31,8 +31,8 @@ from avatar.blink import BlinkSchedule
 
 from direct.actor.Actor import Actor
 from direct.gui.OnscreenText import OnscreenText
-from panda3d.core import (AmbientLight, CardMaker, DirectionalLight, TextNode,
-                          TransparencyAttrib, Vec4)
+from panda3d.core import (AmbientLight, CardMaker, DirectionalLight, Mat3, Mat4,
+                          Quat, TextNode, TransparencyAttrib, Vec4, invert)
 
 CAPTION_TOP = -0.42
 # Last row may not reach the credit band below it.
@@ -135,8 +135,10 @@ AVATARS = {
         # The lens texture's alpha is a flat 0.93: the tint strength the game's
         # glass shader works from, not how see-through the lens looks in game,
         # where his eyes show through the red. At 0.93 a blink is invisible at
-        # the live framing. Scaled to ~0.5 (owner's call, 2026-09-28), which
-        # still reads as red aviators with the eyes behind them.
+        # the live framing. Scaled to ~0.5 (owner's call, 2026-09-28), then to
+        # 0.3 (owner's call, 2026-10-07) so the eyes can be SEEN following the
+        # viewer behind the glass. Still reads as red aviators at 0.3; at
+        # 0.15 it starts to look like clear glass.
         # Brows rise on emphasis while he talks (lipsync.emphasis). All 26
         # brow joints hang off face_root_JNT, so one "up" in the face's own
         # frame moves them together and follows the head. Found by rendering:
@@ -144,7 +146,19 @@ AVATARS = {
         # tucks them behind the glasses frame, so there is no frown channel.
         "brows": {"match": "_J_eye_brows_", "parent": "face_root_JNT",
                   "metres": 0.004},
-        "lens": {"mesh": "glass", "alpha_scale": 0.54},
+        "lens": {"mesh": "glass", "alpha_scale": 0.3},
+        # Behind the glass his neck and head turn to the viewer on top of the
+        # clip, and the eyeballs (which no clip moves) take the rest of the
+        # angle, so his eyes land on you while the head only half turns.
+        "look": {"pivot": 0.15,
+                 "joints": (("ValveBiped.Bip01_Neck1", 0.3),
+                            ("ValveBiped.Bip01_Head1", 0.35)),
+                 "eyes": ("LeftEye", "RightEye"),
+                 "heading": 25, "pitch": 15},
+        # A shade lower than PORTAL_RISE: the stance clip's last frames lift
+        # his head, and with the look on top his eyes came within 2mm of the
+        # top edge for a close, high viewer (test_portal_eyes_in_view).
+        "portal_rise": 0.18,
         "prop": {"joint": "ValveBiped.Bip01_R_Finger11",
                  "pos": (0.01020, -0.01338, 0.00348), "hpr": (152.5, 90.0, -61.7),
                  "clips": ("smoking",)},
@@ -202,7 +216,8 @@ EXTRA_DIR = ASSET_DIR / "extra"
 # required; see assets/avatar/ATTRIBUTION.md, "Adding your own models".
 _EXTRA_KEYS = {"model", "credit", "head_mesh", "head_fraction", "mouth",
                "idle_anim", "anims", "idle_variety", "poses", "sway",
-               "portal_framing", "portal_rise", "portal_still", "dormant", "glow"}
+               "portal_framing", "portal_rise", "portal_still", "dormant", "glow",
+               "look"}
 
 
 def _read_extra(folder: Path):
@@ -527,6 +542,111 @@ class _IdleMotion:
         self._bundle.forceUpdate()
 
 
+def _parent_of(group, name):
+    """Name of joint `name`'s parent joint (PartGroups have no parent link)."""
+    for child in group.get_children():
+        if child.get_name() == name:
+            return group.get_name()
+        found = _parent_of(child, name)
+        if found is not None:
+            return found
+    return None
+
+
+class _Look:
+    """Turn the neck, head and eyes toward the viewer ON TOP of the clip.
+
+    controlJoint detaches a joint from its animation, and every clip these
+    models ship moves the neck and head -- so taking them over naively froze
+    the mech's shake and Johnny's whole idle. Instead each driven joint is
+    rebuilt every frame from what the clips would have given it (sampled
+    straight off their channels, blended by the same weights the actor uses)
+    and THEN turned. The clip keeps its motion; the look is layered on it.
+
+    Config, per model (`look`):
+      joints  [[name, share], ...] parent first. Each turns by `share` of the
+              full angle to the viewer, about axes fixed in the world, so the
+              shares add up the chain.
+      eyes    [name, ...] eyeball joints. They take whatever share is left, so
+              head plus eyes always land on the viewer.
+      pivot   share the whole model turns by (the rest is joints and eyes).
+      heading, pitch  limits in degrees for the full angle.
+    """
+
+    def __init__(self, actor, bundle, render, config):
+        self._actor = actor
+        self._bundle = bundle
+        self._render = render
+        self.pivot_share = float(config.get("pivot", 0.0))
+        self.heading_limit = float(config.get("heading", 25.0))
+        self.pitch_limit = float(config.get("pitch", 15.0))
+        self._clips = list(actor.getAnimNames())
+        self._joints = []
+        used = self.pivot_share
+        for name, share in config.get("joints", ()):
+            self._joints.append(self._take(name, float(share)))
+            used += float(share)
+        eyes = [n for n in config.get("eyes", ()) if bundle.find_child(n) is not None]
+        self._joints += [self._take(n, max(0.0, 1.0 - used)) for n in eyes]
+        self._joints = [j for j in self._joints if j is not None]
+        self.driven = [j[0] for j in self._joints]
+
+    def _take(self, name, share):
+        joint = self._bundle.find_child(name)
+        if joint is None:
+            return None
+        parent = _parent_of(self._bundle, name)
+        # Its value before anyone controls it: the rest pose, used when no
+        # clip carries this joint (eyeballs) and as the fallback otherwise.
+        rest = Mat4(joint.get_default_value())
+        channels = []
+        for clip in self._clips:
+            control = self._actor.getAnimControl(clip)
+            channel = control.getAnim().find_child(name) if control else None
+            if channel is not None:
+                channels.append((control, channel))
+        node = self._actor.controlJoint(None, "modelRoot", name)
+        # Read-only follower of the PARENT's world transform -- exposeJoint
+        # does not detach anything. One frame stale, which only matters for
+        # the axis it converts through, by a fraction of a degree.
+        follow = self._actor.exposeJoint(None, "modelRoot", parent)
+        return (name, share, node, follow, rest, channels)
+
+    def _clip_value(self, rest, channels):
+        """The joint's local matrix as the playing clips would set it."""
+        total = 0.0
+        out = Mat4(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        sample = Mat4()
+        for control, channel in channels:
+            weight = self._bundle.get_control_effect(control)
+            if weight <= 0.0:
+                continue
+            channel.get_value(control.getFrame(), sample)
+            out += sample * weight
+            total += weight
+        return rest if total <= 0.0 else out * (1.0 / total)
+
+    def apply(self, heading: float, elevation: float) -> None:
+        """Layer a turn of `heading`/`elevation` degrees on every joint.
+
+        `elevation` is where the viewer sits: positive above him. He faces -Y
+        (out of the glass), so lifting his face toward a viewer above is a
+        NEGATIVE Panda pitch.
+        """
+        for name, share, node, follow, rest, channels in self._joints:
+            turn = Quat()
+            turn.set_hpr((heading * share, -elevation * share, 0.0))
+            parent = follow.get_quat(self._render)
+            # The world-axis turn, re-expressed in the parent's frame.
+            local_turn = parent * turn * invert(parent)
+            value = Mat4(self._clip_value(rest, channels))
+            rotation = Mat3()
+            local_turn.extract_to_matrix(rotation)
+            value.set_upper_3(value.get_upper_3() * rotation)
+            node.set_mat(value)
+        self._bundle.forceUpdate()
+
+
 class _Flash:
     """A cut to black that fades out over a swap, portal mode only.
 
@@ -684,6 +804,16 @@ class AvatarScene:
             # _begin_fade's job.
             self.actor.loop(self.config["idle_anim"])
             self._looping = self.config["idle_anim"]
+            # Explicit, so the look below can read the blend weights; it
+            # changes nothing on screen (loop already plays at full weight).
+            self.actor.set_control_effect(self._looping, 1.0)
+        # Head and eyes follow the viewer behind the glass. A static model, or
+        # one with no `look`, turns as one piece on the pivot instead.
+        look = self.config.get("look")
+        self.look = (_Look(self.actor, self._bundle, self.base.render, look)
+                     if self.portal is not None and look and self._bundle is not None
+                     else None)
+        self._facing = (0.0, 0.0)
         if self.portal is not None:
             self.lights = stage.light_room(self.base.render, self.pivot,
                                            self.portal, self.room_depth)
@@ -1018,13 +1148,35 @@ class AvatarScene:
         """
         if self.portal is None:
             return
-        self.gaze = portal_mod.gaze_heading(eye, PORTAL_DEPTH)
+        look = getattr(self, "look", None)
+        limits = ({} if look is None else
+                  {"limit_deg": look.heading_limit})
+        self.gaze = portal_mod.gaze_heading(eye, PORTAL_DEPTH, **limits)
         if self.pivot is not None:
-            self.gaze_p = portal_mod.gaze_pitch(eye, PORTAL_DEPTH, self.pivot.get_z())
+            limits = ({} if look is None else
+                      {"limit_deg": look.pitch_limit})
+            self.gaze_p = portal_mod.gaze_pitch(eye, PORTAL_DEPTH,
+                                                self._pivot_z0, **limits)
         if self.base.camLens is None:
             return
         portal_mod.apply_off_axis(self.base.camera, self.base.camLens, eye,
                                   self.portal)
+
+    def face(self, heading: float, elevation: float) -> None:
+        """Turn him toward a viewer `heading` degrees across and `elevation`
+        degrees up (gaze / gaze_p), split between the pivot and the look joints.
+
+        He faces -Y, out of the glass, so lifting his face toward a viewer
+        ABOVE him is a negative Panda pitch. (Until 2026-10-07 the pivot was
+        given +gaze_p, which tipped his face up, away from a seated viewer.)
+        """
+        self._facing = (heading, elevation)
+        if self.pivot is None:
+            return
+        share = 1.0 if self.look is None else self.look.pivot_share
+        self.pivot.set_hpr(heading * share, -elevation * share, 0.0)
+        if self.look is not None:
+            self.look.apply(heading, elevation)
 
     def _light(self):
         key = DirectionalLight("key")
@@ -1066,10 +1218,9 @@ class AvatarScene:
         if self.pivot is not None:
             # Eased, not set: the tracked eye already arrives smoothed, but a
             # head that turns at camera rate still reads as mechanical.
-            current = self.pivot.get_h()
-            self.pivot.set_h(current + (self.gaze - current) * 0.08)
-            pitch = self.pivot.get_p()
-            self.pivot.set_p(pitch + (self.gaze_p - pitch) * 0.08)
+            heading, elevation = self._facing
+            self.face(heading + (self.gaze - heading) * 0.08,
+                      elevation + (self.gaze_p - elevation) * 0.08)
             if not self.animated:
                 self.pivot.set_z(self._pivot_z0 + self._breath * math.sin(
                     2.0 * math.pi * elapsed / BREATH_PERIOD))

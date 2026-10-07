@@ -9,9 +9,27 @@
     "degrees": 18.0
   },
   "idle_anim": "anim",
-  "portal_framing": 1.45,
-  "portal_rise": -0.04,
+  "portal_framing": 1.75,
+  "portal_rise": 0.07,
   "glow": 16,
-  "portal_still": true,
-  "sway": 1.5
+  "sway": 1.5,
+  "look": {
+    "pivot": 0.3,
+    "joints": [
+      [
+        "neck_3_04",
+        0.2
+      ],
+      [
+        "neck_4_05",
+        0.2
+      ],
+      [
+        "head_06",
+        0.3
+      ]
+    ],
+    "heading": 25,
+    "pitch": 15
+  }
 }

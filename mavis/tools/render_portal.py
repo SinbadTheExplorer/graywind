@@ -41,18 +41,22 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--avatar", default="mech-bust")
     ap.add_argument("--out", default="/tmp/portal.png")
-    ap.add_argument("--clip", default=None, help="hold this clip's frame 0")
+    ap.add_argument("--clip", default=None, help="hold this clip (default: idle)")
+    ap.add_argument("--frame", type=int, default=0, help="...at this frame")
     args = ap.parse_args()
 
     base = ShowBase()
     screen = portal.screen_from_env()
     sc = scene_mod.AvatarScene(base, args.avatar, portal=screen)
-    if args.clip:
-        sc.actor.pose(args.clip, 0)
+    clip = args.clip or (sc.config.get("idle_anim") if sc.animated else None)
+    if clip:
+        sc.actor.pose(clip, args.frame)
 
     tiles = []
     for name, eye in EYES.items():
         sc.look_from(eye)
+        # Turned all the way to this eye, as he settles after easing.
+        sc.face(sc.gaze, sc.gaze_p)
         sc.show_hud(f"JOHNNY // LOCKED   eye {-eye[1]:.2f}m   "
                     f"x{eye[0]:+.2f} z{eye[2]:+.2f}   cam 30fps")
         for _ in range(3):

@@ -1,6 +1,8 @@
 """Portal mode in the scene: he stands behind the glass, inside his room."""
+import math
+
 import pytest
-from panda3d.core import loadPrcFileData
+from panda3d.core import Point3, Vec3, invert, loadPrcFileData
 
 loadPrcFileData("", "window-type none\naudio-library-name null\n"
                     "hardware-animated-vertices false")
@@ -77,15 +79,43 @@ def test_overlay_mode_is_untouched(base):
 
 
 def test_gaze_turns_his_head_toward_the_viewer_gradually(avatar):
-    avatar.pivot.set_h(0)
+    avatar.face(0.0, 0.0)
     avatar.look_from((0.25, -0.6, 0.0))
     assert avatar.gaze > 0
     avatar.idle(1.0)
-    first = avatar.pivot.get_h()
+    first = avatar._facing[0]
     assert 0 < first < avatar.gaze, "should ease, not snap"
     for i in range(200):
         avatar.idle(1.0 + i / 60)
-    assert avatar.pivot.get_h() == pytest.approx(avatar.gaze, abs=0.05)
+    assert avatar._facing[0] == pytest.approx(avatar.gaze, abs=0.05)
+    # The pivot carries only its share; neck and head carry the rest.
+    assert avatar.pivot.get_h() == pytest.approx(
+        avatar.gaze * avatar.look.pivot_share, abs=0.05)
+
+
+@pytest.mark.parametrize("eye", [(0.0, -0.6, -0.15), (0.0, -0.45, 0.10),
+                                 (0.2, -0.6, 0.0), (-0.2, -0.85, -0.15)])
+def test_his_face_points_at_the_viewer(avatar, eye):
+    """The head turns to the viewer, not just in their general direction.
+
+    Until 2026-10-07 the pivot's pitch had the wrong sign: a viewer sitting
+    below him (the usual case) made him tip his face UP, away from them.
+    """
+    head = avatar.actor.expose_joint(None, "modelRoot", "head_06")
+    render = avatar.base.render
+    avatar.face(0.0, 0.0)
+    avatar.face(0.0, 0.0)
+    # He faces out of the glass (-Y) at rest; that is his face's own axis.
+    forward = invert(head.get_quat(render)).xform(Vec3(0, -1, 0))
+    avatar.look_from(eye)
+    avatar.face(avatar.gaze, avatar.gaze_p)
+    avatar.face(avatar.gaze, avatar.gaze_p)
+    facing = head.get_quat(render).xform(forward)
+    wanted = Point3(*eye) - avatar.pivot.get_pos(render)
+    facing.normalize()
+    wanted.normalize()
+    assert math.degrees(math.acos(min(1.0, facing.dot(wanted)))) < 5.0
+    assert (facing[2] < 0) == (wanted[2] < 0), "tilting the wrong way"
 
 
 def test_every_wall_faces_into_the_room(avatar):
