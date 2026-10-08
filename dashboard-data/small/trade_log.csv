@@ -23,3 +23,4 @@ timestamp,symbol,side,qty,price,reason
 2026-10-06T10:02:45.963685-04:00,SERV,buy,21.4898,4.86,approved via GitHub issue
 2026-10-06T15:47:09.836661-04:00,SERV,sell,21.4898,4.76,stop/target exit
 2026-10-08T09:46:45.717148-04:00,SERV,buy,22.5936,4.59,approved via GitHub issue
+2026-10-08T11:32:02.146044-04:00,SERV,sell,22.5936,4.47,stop/target exit
