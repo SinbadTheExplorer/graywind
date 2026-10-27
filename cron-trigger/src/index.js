@@ -6,9 +6,11 @@
 // so this Worker's own cron only needs to be reliable, not GitHub's.
 
 // Bullion's news-hourly.yml (claudekit repo) has the same GitHub scheduler
-// collapse, so this Worker dispatches it too, on its own cron entry. Must
-// match the second entry in wrangler.toml's crons exactly.
-const BULLION_CRON = "11 13-21 * * 1-5";
+// collapse, so this Worker dispatches it too, on its own cron entry. Routed
+// by the cron's minute field ("11", never one of graywind's 0/15/30/45)
+// rather than the whole string, so it doesn't depend on whether Cloudflare
+// echoes "mon-fri" back as written or normalized.
+const BULLION_CRON_MINUTE = "11";
 
 function triggerGraywindCycle(env) {
   return dispatchWorkflow(env, env.GITHUB_REPO, env.GITHUB_WORKFLOW_FILE);
@@ -40,7 +42,7 @@ async function dispatchWorkflow(env, repo, workflowFile) {
 export default {
   async scheduled(event, env, ctx) {
     ctx.waitUntil(
-      event.cron === BULLION_CRON ? triggerBullionNews(env) : triggerGraywindCycle(env)
+      event.cron.split(" ")[0] === BULLION_CRON_MINUTE ? triggerBullionNews(env) : triggerGraywindCycle(env)
     );
   },
 

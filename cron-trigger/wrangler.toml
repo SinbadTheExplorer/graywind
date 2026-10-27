@@ -8,11 +8,15 @@ compatibility_date = "2026-09-03"
 # top-of-file comment. Full 15-min cadence restored here since the
 # reliability problem was GitHub's own scheduler, not this Worker's.
 [triggers]
+# Day names, never numbers: Cloudflare counts 1 = Sunday ... 7 = Saturday
+# (GitHub/Unix cron: 0 = Sunday), so the old "1-5" meant Sun-Thu -- this
+# Worker never fired on a Friday and fired all day every Sunday until
+# 2026-10-27. https://developers.cloudflare.com/workers/configuration/cron-triggers/
 # Second entry (added 2026-10-23) dispatches Bullion's news-hourly.yml in the
 # claudekit repo -- GitHub's `schedule:` creates only ~2 of its 9 weekday
 # slots, the same collapse this Worker already fixed for graywind. Must match
 # BULLION_CRON in src/index.js exactly; that's how scheduled() tells them apart.
-crons = ["*/15 13-20 * * 1-5", "11 13-21 * * 1-5"]
+crons = ["*/15 13-20 * * mon-fri", "11 13-21 * * mon-fri"]
 
 # Non-secret: which repo/workflow to dispatch. GITHUB_PAT is set separately
 # via `wrangler secret put GITHUB_PAT` -- never put a real token in this
