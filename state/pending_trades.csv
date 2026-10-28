@@ -1,2 +1,3 @@
 symbol,issue_number,side,qty,price_at_proposal,stop_price,target_price,tier,proposed_date
 SPY,90,buy,27.8675,771.65,,,1,2026-10-28
+SERV,,buy,2163.42,2.995,2.94,3.08,3,2026-10-28
