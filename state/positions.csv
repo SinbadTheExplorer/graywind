@@ -1,4 +1,4 @@
 symbol,entry_price,shares,stop,target,opened_date,pending_sell_order_id,pending_sell_order_covers
 SPY,770.15,65.0,754.75,793.25,2026-08-19,,
 AAPL,340.99,29.8267,334.36,351.42,2026-10-12,,
-SERV,2.875,2117.3142,2.84,2.98,2026-10-28,,
+SERV,2.875,2117.3142,2.84,2.98,2026-10-28,fc1015f4-7bd1-4788-b3df-f3cead373277,
