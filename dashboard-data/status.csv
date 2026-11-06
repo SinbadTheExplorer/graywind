@@ -1,3 +1,3 @@
 last_cycle_timestamp,account_equity,today_pnl,symbol,position_open,shares,entry_price,current_price,action,reason
-2026-11-06T12:30:50.581670-05:00,100439.42,28.0,AAPL,False,,,344.14,blocked,vix_gate
-2026-11-06T12:30:50.581670-05:00,100439.42,28.0,SERV,False,,,3.055,hold,no buy signal
+2026-11-06T12:45:49.275675-05:00,100429.42,18.0,AAPL,False,,,344.145,blocked,vix_gate
+2026-11-06T12:45:49.275675-05:00,100429.42,18.0,SERV,False,,,3.025,hold,no buy signal
