@@ -21,9 +21,10 @@ The desktop wake-word flow (`avatar/app.py`, `wake.py`) is left as is. The call 
    - The server cancels all work the moment the socket closes. That gives End call its 1 s limit.
 
 2. **Call page (one static HTML file, served by FastAPI)**
-   - Sesame-style layout: a Johnny card, Call button, then the call screen with orb, timer, Mute and End call.
+   - Sesame-style layout: a Johnny card, Call button, then the call screen with **3D Johnny**, timer, Mute and End call.
+   - three.js (pinned version from a CDN) loads `jonny_fixed.glb`. His mouth follows his voice's volume, the same idea as `lipsync.py`. Listening/thinking/speaking play the existing clips named in the scene config.
+   - Check the phone frame rate; if it's under 24 fps, shrink the model's textures. If it still fails, fall back to the orb.
    - Browser mic with voice-activity detection to cut utterances, so only finished speech is sent and silence is never uploaded.
-   - The orb reacts to his playback volume and to your mic level.
    - The API key is entered once and saved on that device.
    - Mobile-first layout; check it on iPhone Safari specifically, which is strict about audio autoplay and the mic.
 
@@ -54,4 +55,5 @@ Build 1→2→3, which covers criteria #1–#4 and #6. Then step 5 (the timing l
 ## Risks
 - **iPhone audio:** Safari blocks audio that doesn't follow a tap. The Call tap must unlock playback.
 - **Kokoro speed:** the laptop's CPU sets the speed. If the 3 s target fails, fall back to a cloud voice.
-- **Laptop asleep:** calls fail. This is accepted for v1 and is on the someday list.
+- **Model weight on phones:** the avatar folder is 53 MB in total; check the size of `jonny_fixed.glb` itself and compress it (e.g. gltf-transform) if it loads slowly.
+- **Laptop asleep:** calls fail in v1. Cloud move decided after #1–#3 pass. Keep config in environment variables so it can move.

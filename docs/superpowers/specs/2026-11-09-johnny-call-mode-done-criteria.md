@@ -1,6 +1,6 @@
 # Johnny Call Mode: Done Criteria
 
-**Agreed:** 2026-11-09 by the owner. **Built by:** Fri 2026-11-13. **Done by:** Fri 2026-11-20.
+**Agreed:** 2026-11-09 by the owner. **Built by:** Mon 2026-11-16. **Done by:** Mon 2026-11-23.
 **Scope change to** Johnny Hub v1 (`2026-10-11-johnny-hub-v1-done-criteria.md`), which is past its 10/22 budget. This change replaces how Johnny is summoned. It does not add a new project.
 
 **Why:** Johnny appearing at the wrong times, or not appearing at all, comes from three parts:
@@ -15,14 +15,14 @@ Sesame-style calling replaces all three with explicit buttons, in a web page tha
 - tap **End call**
 
 ## What it is
-- **Call page:** a single web page modeled on Sesame's voice demo. It has a voice-reactive orb in Johnny's colours, a call timer, Call / End call / Mute, and no face.
+- **Call page:** a single web page modeled on Sesame's voice demo. It shows **Johnny's existing 3D model** (`jonny_fixed.glb`, rendered with three.js), with his mouth driven by his voice and his existing listening/thinking/speaking clips. It also has a call timer and Call / End call / Mute. A voice-reactive orb is the fallback if the model can't load or runs too slowly.
 - **Where it runs:** the page is served by the owner's laptop. The phone reaches it over Tailscale, which gives one private HTTPS address that works on home wifi and away. HTTPS is required for browser mic access.
-- **The 3D mech:** stays a laptop-only extra and is not part of the call.
-- **Limitation:** calls work only while the laptop is awake and Johnny is running.
+- **No new animation here.** The page plays only the model and clips that already exist; new animation stays in the owner's claude.ai lane.
+- **Limitation (v1):** calls work only while the laptop is awake. Moving the server to the cloud is decided **after #1–#3 pass**. The options are about $5/month for a small server, or Oracle Pay-As-You-Go: free Oracle reclaims idle servers after 7 days, so it's ruled out. The code stays portable.
 
 ## Criteria (stop when all six pass)
 
-1. **Connects cleanly.** 10 of 10 calls connect on each of the following, with no glitch (no stuck "connecting", no broken audio, no frozen orb):
+1. **Connects cleanly.** 10 of 10 calls connect on each of the following, with no glitch (no stuck "connecting", no broken audio, no frozen or missing model, phone at **24 fps or better** while he talks):
    - phone on home wifi
    - phone on cellular away from home
    - laptop browser
@@ -39,10 +39,11 @@ Sesame-style calling replaces all three with explicit buttons, in a web page tha
    - Out of scope: real Graywind/Bullion alarm detection. That stays Hub v1 P1 (`health.py`, not built yet).
 6. **Someone else can use it.** One person who isn't the owner places a call on the owner's phone or laptop, asks a question and ends the call, with no instructions. This triggers a stage-5 feedback session (`~/.claude/feedback/`).
 
-**Rule:** if 11/20 passes and the work isn't done, cut #5 first rather than extend.
+**Rule:** if 11/23 passes and the work isn't done, cut #5 first rather than extend.
 
 ## Out of scope (someday list)
 - Interrupting him mid-sentence by talking (Sesame's full-duplex barge-in). This is the first upgrade if calls feel stiff.
 - A native phone app, or real ringing while the page is closed
 - Hosting Johnny off the laptop so he works when it's asleep
-- Any face or new animation on the call page. The owner does animation work in claude.ai chat, not here.
+- Head and eyes following the viewer through the phone camera on the call page
+- New animation of any kind (owner's claude.ai lane)
