@@ -22,7 +22,7 @@ The desktop wake-word flow (`avatar/app.py`, `wake.py`) is left as is. The call 
 
 2. **Call page (one static HTML file, served by FastAPI)**
    - Sesame-style layout: a Johnny card, Call button, then the call screen with **3D Johnny**, timer, Mute and End call.
-   - three.js (pinned version from a CDN) loads `jonny_fixed.glb`. His mouth follows his voice's volume, the same idea as `lipsync.py`. Listening/thinking/speaking play the existing clips named in the scene config.
+   - three.js r160 (vendored in `web/vendor`) loads `keanu-web.glb` (built: Blender `tools/retarget_anim.py` with the 5 Mixamo clips, then `gltf-transform optimize --compress meshopt --texture-compress webp --texture-size 1024 --simplify false --join false --flatten false --palette false --instance false`). His mouth follows his voice's volume, the same idea as `lipsync.py`. Listening/thinking/speaking play the existing clips named in the scene config.
    - Check the phone frame rate; if it's under 24 fps, shrink the model's textures. If it still fails, fall back to the orb.
    - Browser mic with voice-activity detection to cut utterances, so only finished speech is sent and silence is never uploaded.
    - The API key is entered once and saved on that device.

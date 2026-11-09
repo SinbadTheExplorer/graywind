@@ -15,7 +15,7 @@ Sesame-style calling replaces all three with explicit buttons, in a web page tha
 - tap **End call**
 
 ## What it is
-- **Call page:** a single web page modeled on Sesame's voice demo. It shows **Johnny's existing 3D model** (`jonny_fixed.glb`, rendered with three.js), with his mouth driven by his voice and his existing listening/thinking/speaking clips. It also has a call timer and Call / End call / Mute. A voice-reactive orb is the fallback if the model can't load or runs too slowly.
+- **Call page:** a single web page modeled on Sesame's voice demo. It shows **Johnny's existing 3D model**: the local-only Keanu port, rebuilt as `assets/avatar/keanu-web.glb` (6.4 MB, gitignored, served only with the key; rendered with three.js), with his mouth driven by his voice and his existing listening/thinking/speaking clips. It also has a call timer and Call / End call / Mute. A voice-reactive orb is the fallback if the model can't load or runs too slowly.
 - **Where it runs:** the page is served by the owner's laptop. The phone reaches it over Tailscale, which gives one private HTTPS address that works on home wifi and away. HTTPS is required for browser mic access.
 - **No new animation here.** The page plays only the model and clips that already exist; new animation stays in the owner's claude.ai lane.
 - **Limitation (v1):** calls work only while the laptop is awake. Moving the server to the cloud is decided **after #1–#3 pass**. The options are about $5/month for a small server, or Oracle Pay-As-You-Go: free Oracle reclaims idle servers after 7 days, so it's ruled out. The code stays portable.
