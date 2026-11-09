@@ -28,7 +28,7 @@ def test_wrong_key_is_refused():
         assert ws.receive_json() == {"type": "error", "message": "wrong or missing key"}
         with pytest.raises(WebSocketDisconnect) as info:
             ws.receive_json()
-    assert info.value.code == 1008
+    assert info.value.code == call_route.CLOSE_WRONG_KEY
 
 
 def test_missing_hello_is_refused():
@@ -36,7 +36,7 @@ def test_missing_hello_is_refused():
         ws.send_text("not json")
         with pytest.raises(WebSocketDisconnect) as info:
             ws.receive_json()
-    assert info.value.code == 1008
+    assert info.value.code == call_route.CLOSE_NO_HELLO
 
 
 def test_right_key_gets_the_greeting_and_can_hang_up():
@@ -79,3 +79,29 @@ def test_hello_does_not_use_a_rate_limit_slot():
         ws.send_json({"type": "hello", "key": "secret123"})
         ws.receive_json()
     assert not any(rate_limit._request_log.values())
+
+
+def test_call_page_is_served():
+    resp = _client().get("/johnny")
+    assert resp.status_code == 200
+    assert "<title>Call Johnny</title>" in resp.text
+
+
+def test_model_needs_the_key(tmp_path, monkeypatch):
+    model = tmp_path / "m.glb"
+    model.write_bytes(b"glTF")
+    monkeypatch.setattr(call_route, "MODEL", model)
+    assert _client().get("/johnny/model.glb").status_code == 401
+    resp = _client().get("/johnny/model.glb", headers={"X-API-Key": "secret123"})
+    assert resp.status_code == 200 and resp.content == b"glTF"
+    assert resp.headers["cache-control"] == "private, no-cache"
+
+
+def test_key_check_endpoint():
+    assert _client().get("/johnny/check").status_code == 401
+    assert _client().get("/johnny/check", headers={"X-API-Key": "secret123"}).json() == {"ok": True}
+
+
+def test_three_js_is_served_locally():
+    resp = _client().get("/johnny/vendor/three/build/three.module.js")
+    assert resp.status_code == 200 and "REVISION = '160'" in resp.text

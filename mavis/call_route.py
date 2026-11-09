@@ -15,7 +15,8 @@ import tempfile
 import threading
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 
 import auth
 import call
@@ -29,7 +30,45 @@ from avatar import tts as avatar_tts
 
 router = APIRouter()
 
+PAGE = Path(__file__).resolve().parent / "web" / "call.html"
+# Built from the local-only Keanu port (see assets/avatar/ATTRIBUTION.md):
+# gitignored and CD Projekt Red's property, so it is served only to a caller
+# holding the key, never as a public file.
+MODEL = Path(os.environ.get(
+    "MAVIS_CALL_MODEL",
+    Path(__file__).resolve().parent / "assets" / "avatar" / "keanu-web.glb"))
+
+
+@router.get("/johnny", include_in_schema=False)
+def call_page():
+    return FileResponse(PAGE, media_type="text/html",
+                        headers={"Cache-Control": "no-cache"})
+
+
+@router.get("/johnny/model.glb", include_in_schema=False)
+def call_model(_key: str = Depends(auth.require_api_key)):
+    if not MODEL.exists():
+        raise HTTPException(404, f"call model missing at {MODEL}")
+    # no-cache: the browser keeps it but asks again (with the key) every
+    # time, so a rebuilt model or a changed key is never served stale.
+    # Unchanged, the answer is a 304 with no body.
+    return FileResponse(MODEL, media_type="model/gltf-binary",
+                        headers={"Cache-Control": "private, no-cache"})
+
+
+@router.get("/johnny/check", include_in_schema=False)
+def call_check(_key: str = Depends(auth.require_api_key)):
+    """Lets the page test a key before saving it."""
+    return {"ok": True}
+
+
+VENDOR = Path(__file__).resolve().parent / "web" / "vendor"
+
 HELLO_TIMEOUT = 5.0
+# Distinct codes so the page clears its saved key only for a wrong key,
+# never for a slow or garbled hello.
+CLOSE_NO_HELLO = 4400
+CLOSE_WRONG_KEY = 4401
 CALL_MAX_CHARS = avatar_brain.MAX_ANSWER_CHARS
 
 _voice_lock = threading.Lock()
@@ -128,14 +167,14 @@ async def call_ws(ws: WebSocket):
     try:
         hello = await asyncio.wait_for(ws.receive_json(), HELLO_TIMEOUT)
     except (asyncio.TimeoutError, WebSocketDisconnect, ValueError, KeyError):
-        await _refuse(ws, None, 1008)
+        await _refuse(ws, None, CLOSE_NO_HELLO)
         return
     if not auth.MAVIS_API_KEY:
         await _refuse(ws, "MAVIS_API_KEY not set on the server", 1011)
         return
     key = hello.get("key") if isinstance(hello, dict) else None
     if not auth.key_matches(key):
-        await _refuse(ws, "wrong or missing key", 1008)
+        await _refuse(ws, "wrong or missing key", CLOSE_WRONG_KEY)
         return
     # Instant once warmed; otherwise the first call waits for Kokoro here,
     # off the event loop.

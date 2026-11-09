@@ -137,3 +137,9 @@ async def ask_stream(req: AskRequest, api_key: str = Depends(auth.require_api_ke
 import call_route  # noqa: E402
 
 app.include_router(call_route.router)
+
+from fastapi.staticfiles import StaticFiles  # noqa: E402
+
+# three.js, pinned and served from here rather than a CDN: the page keeps
+# the MAVIS key in localStorage, so no third-party script may run on it.
+app.mount("/johnny/vendor", StaticFiles(directory=call_route.VENDOR), name="johnny-vendor")
