@@ -44,6 +44,17 @@ def _to_wav_bytes(samples: np.ndarray, sample_rate: int) -> bytes:
     return buf.getvalue()
 
 
+async def transcribe_wav(wav: bytes,
+                         *, client: httpx.AsyncClient | None = None) -> str:
+    """Transcribe a WAV file's bytes as they are (the call page sends WAV)."""
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        raise STTError("GROQ_API_KEY not set")
+    if not wav:
+        return ""
+    return await _post(wav, api_key, client or _shared_client())
+
+
 async def transcribe(samples: np.ndarray, sample_rate: int = 16000,
                      *, client: httpx.AsyncClient | None = None) -> str:
     api_key = os.environ.get("GROQ_API_KEY")
@@ -52,13 +63,16 @@ async def transcribe(samples: np.ndarray, sample_rate: int = 16000,
     if samples.size == 0:
         return ""
 
-    client = client or _shared_client()
+    return await _post(_to_wav_bytes(samples, sample_rate), api_key,
+                       client or _shared_client())
+
+
+async def _post(wav: bytes, api_key: str, client: httpx.AsyncClient) -> str:
     try:
         resp = await client.post(
             GROQ_STT_URL,
             headers={"Authorization": f"Bearer {api_key}"},
-            files={"file": ("utterance.wav", _to_wav_bytes(samples, sample_rate),
-                            "audio/wav")},
+            files={"file": ("utterance.wav", wav, "audio/wav")},
             data={"model": GROQ_STT_MODEL, "prompt": GROQ_STT_PROMPT},
         )
     except httpx.RequestError as exc:

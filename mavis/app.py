@@ -1,3 +1,4 @@
+import contextlib
 import json
 
 from fastapi import Depends, FastAPI
@@ -11,7 +12,14 @@ import news
 from providers import GROQ_MODEL, ProviderError, groq_answer, groq_stream
 from rate_limit import check_rate_limit
 
-app = FastAPI()
+@contextlib.asynccontextmanager
+async def _lifespan(_app):
+    import call_route
+    call_route.warm_up_in_background()
+    yield
+
+
+app = FastAPI(lifespan=_lifespan)
 
 
 class AskRequest(BaseModel):
@@ -63,6 +71,47 @@ def _line(**fields) -> str:
     return json.dumps(fields) + "\n"
 
 
+async def _answer_events(query: str, max_chars: int | None):
+    """The spoken answer as event dicts: {"delta"}, then {"done"} or {"error"}.
+
+    Shared by /ask/stream (as NDJSON) and /call (as speech).
+    """
+    # "news debate" is one of Graywind's own gates, not a request for headlines.
+    wants_news = (news.is_news_query(query)
+                  and not graywind_grounding.names_project_internals(query))
+    instruction = None
+    if wants_news:
+        # Before the fetch, so he is already talking while it runs.
+        yield dict(delta=news.random.choice(news.OPENERS) + " ")
+        hits = await news.headlines(query)
+        context = news.format_context(hits)
+        instruction, max_chars = news.INSTRUCTION, news.NEWS_MAX_CHARS
+        refusal = None if context else news.UNAVAILABLE
+    else:
+        bullion_hits = grounding.retrieve(query)
+        graywind_hits = graywind_grounding.retrieve(query)
+        hits = bullion_hits + graywind_hits
+        context = "\n\n".join(filter(None, [
+            grounding.format_context(bullion_hits),
+            graywind_grounding.format_context(graywind_hits),
+        ])) or None
+        refusal = (graywind_grounding.UNGROUNDED
+                   if not context and graywind_grounding.names_project_internals(query)
+                   else None)
+    if refusal:
+        yield dict(delta=refusal)
+        yield dict(done=True, citations=[], grounded=False)
+        return
+    try:
+        async for text in groq_stream(query, context, max_chars=max_chars,
+                                      instruction=instruction):
+            yield dict(delta=text)
+    except ProviderError as exc:
+        yield dict(error=str(exc))
+        return
+    yield dict(done=True, citations=hits, grounded=bool(context))
+
+
 @app.post("/ask/stream")
 async def ask_stream(req: AskRequest, api_key: str = Depends(auth.require_api_key)):
     """The spoken path: the answer as newline-delimited JSON, as it is written.
@@ -77,41 +126,14 @@ async def ask_stream(req: AskRequest, api_key: str = Depends(auth.require_api_ke
     """
     check_rate_limit(api_key)
 
-    # "news debate" is one of Graywind's own gates, not a request for headlines.
-    wants_news = (news.is_news_query(req.query)
-                  and not graywind_grounding.names_project_internals(req.query))
-
     async def body():
-        instruction, max_chars = None, req.max_chars
-        if wants_news:
-            # Before the fetch, so he is already talking while it runs.
-            yield _line(delta=news.random.choice(news.OPENERS) + " ")
-            hits = await news.headlines(req.query)
-            context = news.format_context(hits)
-            instruction, max_chars = news.INSTRUCTION, news.NEWS_MAX_CHARS
-            refusal = None if context else news.UNAVAILABLE
-        else:
-            bullion_hits = grounding.retrieve(req.query)
-            graywind_hits = graywind_grounding.retrieve(req.query)
-            hits = bullion_hits + graywind_hits
-            context = "\n\n".join(filter(None, [
-                grounding.format_context(bullion_hits),
-                graywind_grounding.format_context(graywind_hits),
-            ])) or None
-            refusal = (graywind_grounding.UNGROUNDED
-                       if not context and graywind_grounding.names_project_internals(req.query)
-                       else None)
-        if refusal:
-            yield _line(delta=refusal)
-            yield _line(done=True, citations=[], grounded=False)
-            return
-        try:
-            async for text in groq_stream(req.query, context, max_chars=max_chars,
-                                          instruction=instruction):
-                yield _line(delta=text)
-        except ProviderError as exc:
-            yield _line(error=str(exc))
-            return
-        yield _line(done=True, citations=hits, grounded=bool(context))
+        async for event in _answer_events(req.query, req.max_chars):
+            yield _line(**event)
 
     return StreamingResponse(body(), media_type="application/x-ndjson")
+
+
+# Registered last: call_route imports _answer_events from this module.
+import call_route  # noqa: E402
+
+app.include_router(call_route.router)
