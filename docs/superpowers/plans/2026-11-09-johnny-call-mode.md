@@ -2,48 +2,56 @@
 
 Criteria: `docs/superpowers/specs/2026-11-09-johnny-call-mode-done-criteria.md`. Branch: `feat/mavis-avatar`.
 
-## What changes, in plain terms
-Today, `app.py`'s `_serve` loop blocks on `wait_for_wake()` (the wake word or the W key). It then runs `_conversation()` until a spoken dismissal or a long silence, and `states.py` hides the scene while he's asleep. Call mode swaps the wake word for buttons and stops hiding the scene.
+## What exists already
+- `mavis/app.py`: the FastAPI brain, with `/ask`, `/ask/stream` and API-key auth (`auth.py`).
+- `avatar/stt.py`: Groq Whisper speech-to-text, in the cloud.
+- `avatar/tts.py`: Kokoro voice, local on the laptop, about 0.4x realtime on CPU.
+- `avatar/dismiss.py`, `avatar/canned.py`: dismissal phrases and canned greeting/filler lines. Reuse these.
 
-## Steps (test-first where the logic is pure)
+The desktop wake-word flow (`avatar/app.py`, `wake.py`) is left as is. The call page is a new front door, not a rewrite of the desktop app.
 
-1. **State machine (`states.py`)**
-   - Add `IDLE` (the call screen) and `RINGING` states, plus `on_call()`, `on_pick_up()` and `on_hang_up()`.
-   - `on_hang_up()` is accepted from **any** state.
-   - Idle never calls `scene.hide()`. The scene stays up and shows the call screen. This targets criterion #1.
-   - Unit tests cover every transition, including hang-up during THINKING and SPEAKING.
+## Steps
 
-2. **Call screen + buttons (`scene.py`)**
-   - Add Call and Hang-up buttons drawn in the existing overlay layer (Panda3D DirectGui), plus a "ringing..." label.
-   - Keyboard backups: `C` for call, `H` or `Esc` for hang up (Esc currently quits; quitting moves to `Q`).
-   - Verify by rendering offscreen to PNG and checking it before asking the owner.
+1. **Call endpoint (server, test-first)**
+   - Add a WebSocket `/call` to `mavis/app.py`, behind the existing API key.
+   - Per turn: receive one utterance of audio from the browser → Groq STT → `/ask/stream` logic → Kokoro sentence by sentence → stream audio back.
+   - Send the canned greeting on connect.
+   - If the answer is slow, send filler (the same 3 s rule as the desktop).
+   - A spoken "that's all" ends the call too.
+   - The server cancels all work the moment the socket closes. That gives End call its 1 s limit.
 
-3. **Cancellable conversation (`app.py`)**
-   - Replace `wait_for_wake()` with a wait on a call event.
-   - Run `_conversation()` as a task that hang-up **cancels**.
-   - To meet the 1 s limit, recording (`capture.record_utterance`) and playback (`say`/`_speak`) must also check a stop flag between audio blocks, so a thread blocked on the mic or speaker exits quickly.
-   - Remove the "gone quiet = dismissed" path. A long silence leaves the call open on the call screen.
-   - Spoken "that's all" stays as a backup hang-up.
+2. **Call page (one static HTML file, served by FastAPI)**
+   - Sesame-style layout: a Johnny card, Call button, then the call screen with orb, timer, Mute and End call.
+   - Browser mic with voice-activity detection to cut utterances, so only finished speech is sent and silence is never uploaded.
+   - The orb reacts to his playback volume and to your mic level.
+   - The API key is entered once and saved on that device.
+   - Mobile-first layout; check it on iPhone Safari specifically, which is strict about audio autoplay and the mic.
 
-4. **Wake word off by default**
-   - `wake.py` stays in the repo but is no longer started (flag to re-enable).
-   - This targets criterion #4: no microphone listening while idle.
+3. **Tailscale**
+   - The owner installs Tailscale on the laptop and phone (a one-time manual step, guided).
+   - `tailscale serve` exposes the FastAPI port over HTTPS on the private network only.
+   - Write the URL into the handoff doc.
 
-5. **Incoming call on alarm**
-   - Add a tiny alarm inbox: a file `data/alarms/*.json`, plus a `--test-alarm` command that writes one.
-   - A new alarm makes him ring. Picking up speaks it, and the alarm is removed only after he has spoken it.
-   - Hub v1 P1 `health.py` will write into the same inbox later.
+4. **Alarm push (#5, cut first)**
+   - Alarm inbox `data/alarms/*.json` plus a `--test-alarm` command.
+   - A new alarm sends an ntfy push whose link opens the call page with `?alarm=<id>`.
+   - Johnny opens the call by speaking it, and the alarm is removed only after it has been spoken.
 
-6. **Timing log**
-   - Log call→pick-up, question-end→first-audio and hang-up→silent times to stderr.
-   - The owner's 10/10 checks for #1–#3 use these numbers instead of guessing.
+5. **Timing log**
+   - The server logs call→greeting, question-end→first-audio and close→silent times.
+   - The owner's 10/10 checks for #1–#3 read these numbers.
 
 ## Order and cut line
-Build 1→2→3→4 first: that covers criteria #1–#4 and #6. Step 5 is last and is the first thing cut if time runs out. Step 6 is folded into step 3.
+Build 1→2→3, which covers criteria #1–#4 and #6. Then step 5 (the timing log, small, folded into step 1). Step 4 is last and is the first thing cut.
 
 ## How each criterion gets checked
-- **#1, #3:** the owner runs 10 calls and 10 hang-ups; the timing log plus watching or recording.
+- **#1, #3:** 10 calls on each device or network, plus the timing log.
 - **#2:** the timing log.
-- **#4:** run idle for a day; the log shows zero call events without a button press or alarm.
-- **#5:** `--test-alarm`, then pick up.
+- **#4:** idle day; the log shows no `/call` sessions the owner didn't open.
+- **#5:** `--test-alarm`, then tap the push.
 - **#6:** one other person, no instructions.
+
+## Risks
+- **iPhone audio:** Safari blocks audio that doesn't follow a tap. The Call tap must unlock playback.
+- **Kokoro speed:** the laptop's CPU sets the speed. If the 3 s target fails, fall back to a cloud voice.
+- **Laptop asleep:** calls fail. This is accepted for v1 and is on the someday list.
