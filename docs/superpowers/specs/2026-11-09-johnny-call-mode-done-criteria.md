@@ -4,7 +4,7 @@
 **Scope change to** Johnny Hub v1 (`2026-10-11-johnny-hub-v1-done-criteria.md`), which is past its 10/22 budget. This change replaces how Johnny is summoned. It does not add a new project.
 
 **Why:** Johnny appearing at the wrong times, or not appearing at all, comes from three parts:
-- the wake word ("Wake up, Johnny") misfires
+- the wake word ("Wake up, Johnny") never worked: its model was never trained (`mavis/assets/wakeword/` is empty), so only the W key woke him
 - hiding and re-showing the 3D scene glitches
 - dismissal is spoken-only
 
@@ -44,6 +44,5 @@ Sesame-style calling replaces all three with explicit buttons, in a web page tha
 ## Out of scope (someday list)
 - Interrupting him mid-sentence by talking (Sesame's full-duplex barge-in). This is the first upgrade if calls feel stiff.
 - A native phone app, or real ringing while the page is closed
-- Hosting Johnny off the laptop so he works when it's asleep
 - Head and eyes following the viewer through the phone camera on the call page
 - New animation of any kind (owner's claude.ai lane)
