@@ -168,3 +168,14 @@ This fills Hub v1 done-criterion #2, which was never built. It doesn't move the 
 - **Owner notes:**
   - The Gemini free tier may use conversations to improve Google's products. The owner accepted this on 11/10.
   - Everything stays on free tiers. The owner is to confirm there's no card on Groq.
+
+## 8. Next: voice smoothness (owner reported 11/10 that Kokoro sounded "slow and janky")
+
+- **Owner listening test first (tonight or later):** the same answer rendered with sentence gaps of 0.25 / 0.35 / 0.5 s. The owner suggested 0.5 s.
+- **Fixes, in order:**
+  1. Trim Kokoro's own leading/trailing silence, then add one fixed, tunable gap.
+  2. Pause by punctuation: shorter after commas, longer after `?` and `…`.
+  3. Gapless playback: schedule each buffer on the AudioContext clock instead of `onended`.
+  4. Merge very short sentences, so the voice resets its pitch less often.
+- **Then a voice listening test:** the best Kokoro blends against Sesame CSM-1B (OpenRouter, about $7/M characters; it breaks both the free-only and the no-aggregator rule, so it needs the owner's explicit OK). No cloning of a real actor's voice.
+- **Hardware gate:** self-hosting CSM needs a GPU, and the VPS has none.

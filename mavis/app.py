@@ -1,15 +1,21 @@
+import asyncio
 import contextlib
 import json
+import sqlite3
+import sys
 
 from fastapi import Depends, FastAPI
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from fastapi import HTTPException
+from pydantic import BaseModel, Field, field_validator
 
 import auth
 import grounding
+import guards
+import usage
 import graywind_grounding
 import news
-from providers import GROQ_MODEL, ProviderError, groq_answer, groq_stream
+from providers import ProviderError, groq_answer, groq_stream
 from rate_limit import check_rate_limit
 
 @contextlib.asynccontextmanager
@@ -19,20 +25,78 @@ async def _lifespan(_app):
     yield
 
 
-app = FastAPI(lifespan=_lifespan)
+# No /docs, /redoc or /openapi.json: they hand anyone a map of every route.
+app = FastAPI(lifespan=_lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+
+from avatar import brain as avatar_brain  # noqa: E402
+
+MAX_QUERY_CHARS = int(guards.env_number("MAVIS_MAX_QUERY_CHARS", 500, minimum=1))
+# 600 unless the owner's own MAVIS_MAX_ANSWER_CHARS knob asks for more.
+MIN_ANSWER_CHARS = 50
+MAX_ANSWER_CHARS = max(600, avatar_brain.MAX_ANSWER_CHARS)
 
 
 class AskRequest(BaseModel):
-    query: str
+    query: str = Field(max_length=MAX_QUERY_CHARS)
     # Optional, and None for every existing caller: the MCP wrapper and the CLI
     # want full answers. Only the spoken avatar sets it, because there a long
     # answer is a long silence while it is voice-converted.
     max_chars: int | None = None
 
+    @field_validator("query")
+    @classmethod
+    def _not_blank(cls, value):
+        # An empty question still costs a paid model call; refuse it free.
+        value = value.strip()
+        if not value:
+            raise ValueError("query is empty")
+        return value
+
+    @field_validator("max_chars")
+    @classmethod
+    def _clamp(cls, value):
+        # Client-chosen, so clamped: a 100k-character "answer" is a token bill.
+        if value is None:
+            return None
+        return max(MIN_ANSWER_CHARS, min(MAX_ANSWER_CHARS, value))
+
 
 @app.get("/status")
 def status():
-    return {"ok": True, "provider": GROQ_MODEL, "auth_configured": auth.configured()}
+    # Liveness only: the model name and auth setup are nobody else's business.
+    return {"ok": True}
+
+
+def _log(msg: str) -> None:
+    print(msg, file=sys.stderr)
+
+
+class ChargeUnavailable(Exception):
+    """The usage store failed; refuse rather than spend uncounted."""
+
+
+async def _charge_llm(rec) -> None:
+    """One answer against the key's and everyone's daily cap.
+
+    Raises usage.CapExceeded (audited) or ChargeUnavailable. Runs in a thread:
+    SQLite's lock wait must not freeze every other call on the event loop.
+    """
+    try:
+        await asyncio.to_thread(usage.charge, rec, "llm", 1)
+    except usage.CapExceeded as exc:
+        await asyncio.to_thread(usage.audit, "cap_hit", rec.id, kind="llm", which=exc.which)
+        raise
+    except (sqlite3.Error, OSError) as exc:
+        _log(f"usage: charge failed, refusing: {exc!r}")
+        raise ChargeUnavailable() from exc
+
+
+async def _refund_llm(rec) -> None:
+    """The model failed before a word was delivered: give the answer back."""
+    try:
+        await asyncio.to_thread(usage.refund, rec, "llm", 1)
+    except (sqlite3.Error, OSError) as exc:
+        _log(f"usage: refund failed: {exc!r}")
 
 
 @app.post("/ask")
@@ -58,7 +122,17 @@ async def ask(req: AskRequest, rec: auth.KeyRecord = Depends(auth.require_api_ke
             "grounded": False,
         }
 
-    answer = await groq_answer(req.query, context, max_chars=req.max_chars)
+    try:
+        await _charge_llm(rec)
+    except usage.CapExceeded as exc:
+        raise HTTPException(429, guards.TAPPED_OUT) from exc
+    except ChargeUnavailable as exc:
+        raise HTTPException(503, guards.GENERIC_ERROR) from exc
+    try:
+        answer = await groq_answer(req.query, context, max_chars=req.max_chars)
+    except HTTPException:
+        await _refund_llm(rec)
+        raise
 
     return {
         "answer": answer,
@@ -71,10 +145,14 @@ def _line(**fields) -> str:
     return json.dumps(fields) + "\n"
 
 
-async def _answer_events(query: str, max_chars: int | None):
+async def _answer_events(query: str, max_chars: int | None, rec):
     """The spoken answer as event dicts: {"delta"}, then {"done"} or {"error"}.
 
-    Shared by /ask/stream (as NDJSON) and /call (as speech).
+    Shared by /ask/stream (as NDJSON) and /call (as speech). `rec` is the
+    caller's KeyRecord and is required: the paid model call is charged here,
+    at the shared layer, so no caller can forget to. Refusals that never
+    reach the model cost nothing, and a model failure before the first word
+    is refunded.
     """
     # "news debate" is one of Graywind's own gates, not a request for headlines.
     wants_news = (news.is_news_query(query)
@@ -103,11 +181,24 @@ async def _answer_events(query: str, max_chars: int | None):
         yield dict(done=True, citations=[], grounded=False)
         return
     try:
+        await _charge_llm(rec)
+    except usage.CapExceeded:
+        yield dict(error=guards.TAPPED_OUT)
+        return
+    except ChargeUnavailable:
+        yield dict(error=guards.GENERIC_ERROR)
+        return
+    spoke = False
+    try:
         async for text in groq_stream(query, context, max_chars=max_chars,
                                       instruction=instruction):
+            spoke = True
             yield dict(delta=text)
     except ProviderError as exc:
-        yield dict(error=str(exc))
+        _log(f"answer: provider failed: {exc}")    # detail stays server-side
+        if not spoke:
+            await _refund_llm(rec)
+        yield dict(error=guards.GENERIC_ERROR)
         return
     yield dict(done=True, citations=hits, grounded=bool(context))
 
@@ -127,7 +218,7 @@ async def ask_stream(req: AskRequest, rec: auth.KeyRecord = Depends(auth.require
     check_rate_limit(rec.id, rec.per_minute)
 
     async def body():
-        async for event in _answer_events(req.query, req.max_chars):
+        async for event in _answer_events(req.query, req.max_chars, rec):
             yield _line(**event)
 
     return StreamingResponse(body(), media_type="application/x-ndjson")

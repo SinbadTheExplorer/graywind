@@ -163,6 +163,18 @@ def record(rec, kind: str, amount: float) -> None:
         conn.close()
 
 
+def refund(rec, kind: str, amount: float) -> None:
+    """Give back a charge for work that failed (never below zero)."""
+    amount = _validate(kind, amount)
+    conn = _connect()
+    try:
+        conn.execute("UPDATE usage SET amount = MAX(0, amount - ?) "
+                     "WHERE day=? AND key_id=? AND kind=?",
+                     (amount, _today(), rec.id, kind))
+    finally:
+        conn.close()
+
+
 def today_totals(key_id: str | None = None) -> dict[str, float]:
     """Today's totals per kind, for one key or (None) for everyone."""
     sql = "SELECT kind, SUM(amount) FROM usage WHERE day=?"

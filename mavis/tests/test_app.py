@@ -27,13 +27,90 @@ def test_status_is_open_without_auth(client):
     assert resp.status_code == 200
 
 
-def test_status_reports_whether_auth_is_configured(client, monkeypatch):
-    resp = client.get("/status")
-    assert resp.json()["auth_configured"] is True
+def test_status_has_only_ok(client):
+    assert client.get("/status").json() == {"ok": True}
 
-    monkeypatch.setattr(auth, "MAVIS_API_KEY", None)
-    resp = client.get("/status")
-    assert resp.json()["auth_configured"] is False
+
+@pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])
+def test_docs_and_openapi_are_gone(client, path):
+    assert client.get(path).status_code == 404
+
+
+def test_ask_rejects_a_query_over_500_chars(client):
+    resp = client.post("/ask", json={"query": "x" * 501},
+                       headers={"X-API-Key": "secret123"})
+    assert resp.status_code == 422
+
+
+@pytest.mark.parametrize("asked,expected", [(100000, 600), (1, 50), (200, 200)])
+def test_max_chars_is_clamped(client, monkeypatch, asked, expected):
+    seen = {}
+
+    async def fake_answer(query, context=None, max_chars=None):
+        seen["max_chars"] = max_chars
+        return "ok"
+
+    monkeypatch.setattr(app_module, "groq_answer", fake_answer)
+    client.post("/ask", json={"query": "hi", "max_chars": asked},
+                headers={"X-API-Key": "secret123"})
+    assert seen["max_chars"] == expected
+
+
+def test_groq_error_body_never_reaches_the_caller(client, monkeypatch):
+    import httpx
+    import providers
+
+    class FakeClient:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, *a, **k):
+            return httpx.Response(401, text="invalid api key gsk_LEAKED_secret")
+
+    monkeypatch.setattr(providers, "GROQ_API_KEY", "x")
+    monkeypatch.setattr(providers.httpx, "AsyncClient", FakeClient)
+    resp = client.post("/ask", json={"query": "hi"}, headers={"X-API-Key": "secret123"})
+    assert resp.status_code == 502
+    assert "LEAKED" not in resp.text and "gsk_" not in resp.text
+
+
+def test_ask_over_cap_is_429_and_never_calls_groq(client, monkeypatch):
+    import usage
+
+    async def must_not_run(*a, **k):
+        raise AssertionError("Groq was called over the cap")
+
+    monkeypatch.setattr(app_module, "groq_answer", must_not_run)
+    owner = auth.lookup("secret123")
+    usage.record(owner, "llm", owner.per_day_llm)
+    resp = client.post("/ask", json={"query": "hi"}, headers={"X-API-Key": "secret123"})
+    assert resp.status_code == 429
+    assert "tapped out" in resp.json()["detail"]
+
+
+def test_stream_over_cap_says_tapped_out_and_never_calls_groq(client, monkeypatch):
+    import usage
+
+    def must_not_run(*a, **k):
+        raise AssertionError("Groq was called over the cap")
+
+    monkeypatch.setattr(app_module, "groq_stream", must_not_run)
+    owner = auth.lookup("secret123")
+    usage.record(owner, "llm", owner.per_day_llm)
+    lines = _spoken(client, "what is the capital of France")
+    assert lines == [{"error": "I'm tapped out for today, choom. Call me tomorrow."}]
+
+
+def test_each_answer_is_counted_once(client, monkeypatch):
+    import usage
+
+    async def fake_answer(query, context=None, max_chars=None):
+        return "ok"
+
+    monkeypatch.setattr(app_module, "groq_answer", fake_answer)
+    client.post("/ask", json={"query": "hi"}, headers={"X-API-Key": "secret123"})
+    client.post("/ask", json={"query": "hi"}, headers={"X-API-Key": "secret123"})
+    assert usage.today_totals("owner-env")["llm"] == 2
 
 
 def test_ask_without_api_key_is_rejected(client):
@@ -218,7 +295,7 @@ def test_a_provider_failure_arrives_as_an_error_line(client, monkeypatch):
 
     lines = _spoken(client, "what is the capital of France")
 
-    assert lines == [{"delta": "Half an "}, {"error": "Groq error 503"}]
+    assert lines == [{"delta": "Half an "}, {"error": "Johnny's line dropped. Try again."}]
 
 
 def test_news_is_answered_from_headlines_fetched_now(client, monkeypatch):
@@ -273,7 +350,7 @@ def test_the_news_debate_gate_is_a_project_question_not_a_news_request(client, m
 
 def test_ask_stream_with_env_key_still_200(client, monkeypatch):
     # The desktop avatar's call: the original env key, now an owner record.
-    async def fake_events(query, max_chars):
+    async def fake_events(query, max_chars, rec):
         yield {"delta": "hi"}
         yield {"done": True, "citations": [], "grounded": False}
 
@@ -282,3 +359,96 @@ def test_ask_stream_with_env_key_still_200(client, monkeypatch):
                        headers={"X-API-Key": "secret123"})
     assert resp.status_code == 200
     assert '"delta": "hi"' in resp.text
+
+
+@pytest.mark.parametrize("query", ["", "   ", "\n\t"])
+def test_blank_query_is_refused_free(client, monkeypatch, query):
+    import usage
+    resp = client.post("/ask", json={"query": query}, headers={"X-API-Key": "secret123"})
+    assert resp.status_code == 422
+    assert usage.today_totals()["llm"] == 0
+
+
+def test_failed_answer_is_refunded(client, monkeypatch):
+    import usage
+    from fastapi import HTTPException
+
+    async def broken(*a, **k):
+        raise HTTPException(502, "Johnny's line dropped. Try again.")
+
+    monkeypatch.setattr(app_module, "groq_answer", broken)
+    for _ in range(3):
+        assert client.post("/ask", json={"query": "hi"},
+                           headers={"X-API-Key": "secret123"}).status_code == 502
+    assert usage.today_totals("owner-env")["llm"] == 0
+
+
+def test_stream_failure_before_first_word_is_refunded(client, monkeypatch):
+    import usage
+    monkeypatch.setattr(app_module, "groq_stream",
+                        _fake_stream({}, fail=ProviderError("Groq error 503")))
+    _spoken(client, "what is the capital of France")
+    assert usage.today_totals("owner-env")["llm"] == 0
+
+
+def test_stream_failure_after_words_is_still_counted(client, monkeypatch):
+    import usage
+    monkeypatch.setattr(app_module, "groq_stream",
+                        _fake_stream({}, "Half an ", fail=ProviderError("Groq error 503")))
+    _spoken(client, "what is the capital of France")
+    assert usage.today_totals("owner-env")["llm"] == 1
+
+
+def test_groq_timeout_is_a_quiet_502(client, monkeypatch):
+    import httpx
+    import providers
+
+    class TimeoutClient:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, *a, **k):
+            raise httpx.ReadTimeout("slow upstream at 10.0.0.5")
+
+    monkeypatch.setattr(providers, "GROQ_API_KEY", "x")
+    monkeypatch.setattr(providers.httpx, "AsyncClient", TimeoutClient)
+    resp = client.post("/ask", json={"query": "hi"}, headers={"X-API-Key": "secret123"})
+    assert resp.status_code == 502
+    assert "10.0.0.5" not in resp.text
+
+
+def test_broken_usage_store_refuses_instead_of_spending(client, monkeypatch):
+    import sqlite3
+    import usage
+
+    def locked(*a, **k):
+        raise sqlite3.OperationalError("database is locked")
+
+    async def must_not_run(*a, **k):
+        raise AssertionError("Groq was called with no usage count")
+
+    monkeypatch.setattr(usage, "charge", locked)
+    monkeypatch.setattr(app_module, "groq_answer", must_not_run)
+    resp = client.post("/ask", json={"query": "hi"}, headers={"X-API-Key": "secret123"})
+    assert resp.status_code == 503
+    monkeypatch.setattr(app_module, "groq_stream", must_not_run)
+    assert _spoken(client, "what is the capital of France") == [
+        {"error": "Johnny's line dropped. Try again."}]
+
+
+def test_call_answers_count_against_the_cap(monkeypatch):
+    import asyncio
+    import call
+    import call_route
+    import usage
+    owner = auth.lookup("secret123")
+    usage.record(owner, "llm", owner.per_day_llm)
+    deps = call_route._call_deps(owner)
+
+    async def run():
+        async for _ in deps.answer("what is the capital of France"):
+            pass
+
+    with pytest.raises(call.AnswerError) as info:
+        asyncio.run(run())
+    assert "tapped out" in str(info.value)

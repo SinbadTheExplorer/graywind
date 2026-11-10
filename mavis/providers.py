@@ -1,8 +1,11 @@
 import json
 import os
+import sys
 
 import httpx
 from fastapi import HTTPException
+
+from guards import GENERIC_ERROR
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 GROQ_MODEL = "openai/gpt-oss-120b"
@@ -83,21 +86,31 @@ def _messages(query, context, max_chars, persona=False, instruction=None):
 
 async def groq_answer(query, context=None, max_chars=None):
     if not GROQ_API_KEY:
-        raise HTTPException(500, "GROQ_API_KEY not set")
+        print("providers: GROQ_API_KEY not set", file=sys.stderr)
+        raise HTTPException(502, GENERIC_ERROR)
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(
-            GROQ_URL,
-            headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
-            json={"model": GROQ_MODEL,
-                  "messages": _messages(query, context, max_chars)},
-        )
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                GROQ_URL,
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+                json={"model": GROQ_MODEL,
+                      "messages": _messages(query, context, max_chars)},
+            )
+    except httpx.RequestError as exc:
+        print(f"providers: Groq unreachable: {exc!r}", file=sys.stderr)
+        raise HTTPException(502, GENERIC_ERROR) from exc
 
     if resp.status_code != 200:
-        raise HTTPException(502, f"Groq error: {resp.text}")
+        # The provider's error body stays in the server log, never the reply.
+        print(f"providers: Groq error {resp.status_code}: {resp.text[:500]}", file=sys.stderr)
+        raise HTTPException(502, GENERIC_ERROR)
 
-    data = resp.json()
-    return data["choices"][0]["message"]["content"]
+    try:
+        return resp.json()["choices"][0]["message"]["content"]
+    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        print(f"providers: Groq reply unreadable: {resp.text[:500]}", file=sys.stderr)
+        raise HTTPException(502, GENERIC_ERROR) from exc
 
 
 async def groq_stream(query, context=None, max_chars=None, instruction=None,

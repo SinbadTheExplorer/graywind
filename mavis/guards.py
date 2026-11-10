@@ -1,0 +1,123 @@
+"""Input guards: what a caller may send before any paid work starts."""
+import os
+import struct
+
+MAX_UTTERANCE_SECONDS = float(os.environ.get("MAVIS_MAX_UTTERANCE_SECONDS", "30"))
+GENERIC_ERROR = "Johnny's line dropped. Try again."
+TAPPED_OUT = "I'm tapped out for today, choom. Call me tomorrow."
+
+
+class BadAudio(ValueError):
+    """Raised when a WAV file does not meet the required constraints."""
+
+
+def _header(n_bytes: int) -> bytes:
+    """A canonical 44-byte header for 16 kHz mono 16-bit PCM."""
+    return (b"RIFF" + struct.pack("<I", 36 + n_bytes) + b"WAVE"
+            + b"fmt " + struct.pack("<IHHIIHH", 16, 1, 1, 16000, 32000, 2, 16)
+            + b"data" + struct.pack("<I", n_bytes))
+
+
+def wav_seconds(data: bytes, max_seconds: float | None = None) -> float:
+    """Seconds of audio in a WAV the caller sent (see normalize_wav)."""
+    return normalize_wav(data, max_seconds)[1]
+
+
+def normalize_wav(data: bytes, max_seconds: float | None = None) -> tuple[bytes, float]:
+    """Check a caller's WAV and rebuild it, returning (clean_wav, seconds).
+
+    The clean copy holds exactly the audio that was measured: the data
+    chunk's declared size, or what actually arrived if less did. Bytes
+    after it -- metadata chunks, or extra audio behind a header that lies
+    small -- never reach the paid speech-to-text, so what is billed is what
+    was measured. Raises BadAudio for anything but 16 kHz mono 16-bit PCM.
+    """
+    if not isinstance(data, (bytes, bytearray)):
+        raise BadAudio("not 16 kHz mono 16-bit WAV")
+    if len(data) < 12 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        raise BadAudio("not 16 kHz mono 16-bit WAV")
+
+    offset = 12
+    fmt_found = False
+    data_found = False
+    audio_bytes = 0
+    audio_start = 0
+
+    while offset + 8 <= len(data):
+        chunk_id = data[offset : offset + 4]
+        chunk_size = struct.unpack_from("<I", data, offset + 4)[0]
+        offset += 8
+
+        # Guard against chunk claiming more bytes than exist
+        payload_end = offset + chunk_size
+        if payload_end > len(data):
+            # Truncate the payload to the actual remaining bytes
+            payload_end = len(data)
+
+        if chunk_id == b"fmt ":
+            if fmt_found:
+                # ignore duplicate fmt chunks
+                pass
+            else:
+                if chunk_size < 16 or offset + 16 > len(data):
+                    raise BadAudio("not 16 kHz mono 16-bit WAV")
+                (
+                    audio_format,
+                    channels,
+                    sample_rate,
+                    _byte_rate,
+                    _block_align,
+                    bits_per_sample,
+                ) = struct.unpack_from("<HHIIHH", data, offset)
+                if (
+                    audio_format != 1
+                    or channels != 1
+                    or sample_rate != 16000
+                    or bits_per_sample != 16
+                ):
+                    raise BadAudio("not 16 kHz mono 16-bit WAV")
+                fmt_found = True
+
+        elif chunk_id == b"data":
+            if not fmt_found:
+                raise BadAudio("not 16 kHz mono 16-bit WAV")
+            audio_start = offset
+            audio_bytes = min(chunk_size, len(data) - offset)
+            audio_bytes -= audio_bytes % 2    # whole 16-bit samples only
+            data_found = True
+            break
+
+        # Move to next chunk, accounting for padding byte if size is odd
+        offset = payload_end
+        if chunk_size % 2 == 1:
+            offset += 1
+
+    if not fmt_found:
+        raise BadAudio("not 16 kHz mono 16-bit WAV")
+    if not data_found:
+        raise BadAudio("no data chunk")
+    if audio_bytes == 0:
+        raise BadAudio("zero length audio")
+
+    seconds = audio_bytes / 32000.0  # 16kHz mono 16‑bit → 32 000 bytes per second
+    limit = max_seconds if max_seconds is not None else MAX_UTTERANCE_SECONDS
+    if seconds > limit:
+        raise BadAudio("utterance too long")
+    return _header(audio_bytes) + data[audio_start:audio_start + audio_bytes], seconds
+
+
+
+def env_number(name: str, default: float, minimum: float = 0) -> float:
+    """A number from the environment; a bad value falls back loudly, never crashes."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        value = float("nan")
+    if not (value == value) or value in (float("inf"), float("-inf")) or value < minimum:
+        import sys
+        print(f"guards: bad {name}={raw!r}, using {default}", file=sys.stderr)
+        return default
+    return value

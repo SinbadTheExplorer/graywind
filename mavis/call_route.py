@@ -139,7 +139,7 @@ def _call_deps(rec: auth.KeyRecord) -> call.CallDeps:
         return await _call_transcribe(rec, wav)
 
     async def answer(question: str):
-        async for event in _answer_events(question, CALL_MAX_CHARS):
+        async for event in _answer_events(question, CALL_MAX_CHARS, rec):
             if "error" in event:
                 raise call.AnswerError(event["error"])
             if "delta" in event:
