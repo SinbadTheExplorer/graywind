@@ -69,7 +69,7 @@
 **Interfaces:**
 - Produces:
   - `@dataclass(frozen=True) KeyRecord(id: str, scope: Literal["owner","guest"], per_minute: int, per_day_llm: int, per_day_stt_seconds: int, revoked: bool = False)`
-  - `keys.lookup(candidate: str | None) -> KeyRecord | None`: compares the SHA-256 hex with `hmac.compare_digest` against every record. Returns `None` for unknown or revoked keys. The env `MAVIS_API_KEY` matches as `KeyRecord("owner-env", "owner", 20, 300, 1800)`.
+  - `auth.lookup(candidate) -> KeyRecord | None` (env key first, then `keys.lookup_file`), plus `auth.still_valid(rec)` re-checked per utterance; `keys.lookup_file`: compares the SHA-256 hex with `hmac.compare_digest` against every record. Returns `None` for unknown or revoked keys. The env `MAVIS_API_KEY` matches as `KeyRecord("owner-env", "owner", 20, 300, 1800)`.
   - `keys.add(key_id: str, scope: str) -> str`: returns the new key, `secrets.token_urlsafe(32)`. Stores the hash only and applies the scope's default caps.
   - `keys.revoke(key_id: str) -> None`
   - `keys.list_records() -> list[KeyRecord]`
@@ -163,7 +163,7 @@
   - `_answer_events(query, max_chars, scope="owner")`. When `scope != "owner"`, skip `graywind_grounding.retrieve` entirely (empty hits). If `names_project_internals(query)`, return `UNGROUNDED`.
   - `/ask` and `/ask/stream` pass `rec.scope`.
 - Modify: `mavis/call_route.py`:
-  - `hello` → `keys.lookup`.
+  - `hello` → `auth.lookup`.
   - Origin check: when the `Origin` header is present and its host differs from `Host`, close 4403.
   - Slots: `guards.CallSlots.acquire(rec.id)`. When busy, send `{"type":"error","message":"Johnny's on another call."}` and close 4429.
   - `_call_transcribe`: `wav_seconds` → `usage.check(rec,"stt_seconds",secs)` → `check_rate_limit` → STT → `usage.record`.

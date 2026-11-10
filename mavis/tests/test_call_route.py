@@ -54,7 +54,7 @@ def test_unset_server_key_says_so(monkeypatch):
     with _client().websocket_connect("/call") as ws:
         ws.send_json({"type": "hello", "key": "anything"})
         assert ws.receive_json() == {"type": "error",
-                                     "message": "MAVIS_API_KEY not set on the server"}
+                                     "message": "no keys configured on the server"}
 
 
 def test_rate_limit_is_checked_before_paid_speech_to_text(monkeypatch):
@@ -67,10 +67,12 @@ def test_rate_limit_is_checked_before_paid_speech_to_text(monkeypatch):
         return "hi"
 
     monkeypatch.setattr(call_route.avatar_stt, "transcribe_wav", fake_stt)
+    monkeypatch.setattr(auth, "MAVIS_API_KEY", "secret123")
     monkeypatch.setattr(rate_limit, "MAX_REQUESTS_PER_WINDOW", 1)
-    assert asyncio.run(call_route._call_transcribe("k", b"one")) == "hi"
+    rec = auth.lookup("secret123")
+    assert asyncio.run(call_route._call_transcribe(rec, b"one")) == "hi"
     with pytest.raises(call.AnswerError):
-        asyncio.run(call_route._call_transcribe("k", b"two"))
+        asyncio.run(call_route._call_transcribe(rec, b"two"))
     assert sent == [b"one"]
 
 
@@ -105,3 +107,23 @@ def test_key_check_endpoint():
 def test_three_js_is_served_locally():
     resp = _client().get("/johnny/vendor/three/build/three.module.js")
     assert resp.status_code == 200 and "REVISION = '160'" in resp.text
+
+
+def test_revoked_key_mid_call_gets_no_paid_stt(monkeypatch):
+    import asyncio
+    import call
+    import keys
+    sent = []
+
+    async def fake_stt(wav):
+        sent.append(wav)
+        return "hi"
+
+    monkeypatch.setattr(call_route.avatar_stt, "transcribe_wav", fake_stt)
+    guest = keys.add("friend", "guest")
+    rec = auth.lookup(guest)
+    assert asyncio.run(call_route._call_transcribe(rec, b"one")) == "hi"
+    keys.revoke("friend")
+    with pytest.raises(call.AnswerError):
+        asyncio.run(call_route._call_transcribe(rec, b"two"))
+    assert sent == [b"one"]

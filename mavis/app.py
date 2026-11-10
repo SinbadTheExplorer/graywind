@@ -32,12 +32,12 @@ class AskRequest(BaseModel):
 
 @app.get("/status")
 def status():
-    return {"ok": True, "provider": GROQ_MODEL, "auth_configured": bool(auth.MAVIS_API_KEY)}
+    return {"ok": True, "provider": GROQ_MODEL, "auth_configured": auth.configured()}
 
 
 @app.post("/ask")
-async def ask(req: AskRequest, api_key: str = Depends(auth.require_api_key)):
-    check_rate_limit(api_key)
+async def ask(req: AskRequest, rec: auth.KeyRecord = Depends(auth.require_api_key)):
+    check_rate_limit(rec.id, rec.per_minute)
 
     bullion_hits = grounding.retrieve(req.query)
     graywind_hits = graywind_grounding.retrieve(req.query)
@@ -113,7 +113,7 @@ async def _answer_events(query: str, max_chars: int | None):
 
 
 @app.post("/ask/stream")
-async def ask_stream(req: AskRequest, api_key: str = Depends(auth.require_api_key)):
+async def ask_stream(req: AskRequest, rec: auth.KeyRecord = Depends(auth.require_api_key)):
     """The spoken path: the answer as newline-delimited JSON, as it is written.
 
     Lines are {"delta": text} while he writes, then one {"done": true,
@@ -124,7 +124,7 @@ async def ask_stream(req: AskRequest, api_key: str = Depends(auth.require_api_ke
     in character, and "what's the news" is answered from headlines fetched
     now rather than from anything the model remembers.
     """
-    check_rate_limit(api_key)
+    check_rate_limit(rec.id, rec.per_minute)
 
     async def body():
         async for event in _answer_events(req.query, req.max_chars):

@@ -46,7 +46,7 @@ def call_page():
 
 
 @router.get("/johnny/model.glb", include_in_schema=False)
-def call_model(_key: str = Depends(auth.require_api_key)):
+def call_model(_rec: auth.KeyRecord = Depends(auth.require_api_key)):
     if not MODEL.exists():
         raise HTTPException(404, f"call model missing at {MODEL}")
     # no-cache: the browser keeps it but asks again (with the key) every
@@ -57,7 +57,7 @@ def call_model(_key: str = Depends(auth.require_api_key)):
 
 
 @router.get("/johnny/check", include_in_schema=False)
-def call_check(_key: str = Depends(auth.require_api_key)):
+def call_check(_rec: auth.KeyRecord = Depends(auth.require_api_key)):
     """Lets the page test a key before saving it."""
     return {"ok": True}
 
@@ -98,11 +98,13 @@ def warm_up_in_background() -> None:
                          daemon=True).start()
 
 
-async def _call_transcribe(api_key: str, wav: bytes) -> str:
+async def _call_transcribe(rec: auth.KeyRecord, wav: bytes) -> str:
     # Counted here, before the paid STT request, so every utterance -- even
     # one that turns out empty or a goodbye -- uses a slot.
+    if not auth.still_valid(rec):
+        raise call.AnswerError("This key was revoked.")
     try:
-        check_rate_limit(api_key)
+        check_rate_limit(rec.id, rec.per_minute)
     except HTTPException as exc:
         raise call.AnswerError(exc.detail) from exc
     return await avatar_stt.transcribe_wav(wav)
@@ -130,11 +132,11 @@ def _call_canned(moment: str) -> bytes | None:
     return _read_line(found[1]) if found else None
 
 
-def _call_deps(api_key: str) -> call.CallDeps:
+def _call_deps(rec: auth.KeyRecord) -> call.CallDeps:
     from app import _answer_events    # app imports this module
 
     async def transcribe(wav: bytes) -> str:
-        return await _call_transcribe(api_key, wav)
+        return await _call_transcribe(rec, wav)
 
     async def answer(question: str):
         async for event in _answer_events(question, CALL_MAX_CHARS):
@@ -169,16 +171,17 @@ async def call_ws(ws: WebSocket):
     except (asyncio.TimeoutError, WebSocketDisconnect, ValueError, KeyError):
         await _refuse(ws, None, CLOSE_NO_HELLO)
         return
-    if not auth.MAVIS_API_KEY:
-        await _refuse(ws, "MAVIS_API_KEY not set on the server", 1011)
+    if not auth.configured():
+        await _refuse(ws, "no keys configured on the server", 1011)
         return
     key = hello.get("key") if isinstance(hello, dict) else None
-    if not auth.key_matches(key):
+    rec = auth.lookup(key)
+    if rec is None:
         await _refuse(ws, "wrong or missing key", CLOSE_WRONG_KEY)
         return
     # Instant once warmed; otherwise the first call waits for Kokoro here,
     # off the event loop.
     await asyncio.to_thread(_call_voice)
-    await call.run_call(ws, _call_deps(key))
+    await call.run_call(ws, _call_deps(rec))
     with contextlib.suppress(Exception):    # the browser may already be gone
         await ws.close()

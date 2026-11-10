@@ -269,3 +269,16 @@ def test_the_news_debate_gate_is_a_project_question_not_a_news_request(client, m
     lines = _spoken(client, "how does the news debate work")
 
     assert "guessing" in lines[0]["delta"]
+
+
+def test_ask_stream_with_env_key_still_200(client, monkeypatch):
+    # The desktop avatar's call: the original env key, now an owner record.
+    async def fake_events(query, max_chars):
+        yield {"delta": "hi"}
+        yield {"done": True, "citations": [], "grounded": False}
+
+    monkeypatch.setattr(app_module, "_answer_events", fake_events)
+    resp = client.post("/ask/stream", json={"query": "hi", "max_chars": 200},
+                       headers={"X-API-Key": "secret123"})
+    assert resp.status_code == 200
+    assert '"delta": "hi"' in resp.text
