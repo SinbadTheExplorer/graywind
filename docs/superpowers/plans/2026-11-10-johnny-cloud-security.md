@@ -129,7 +129,7 @@
   - `AskRequest` gets `Field(max_length=MAX_QUERY_CHARS)`, and a validator clamps `max_chars` to 50–600.
   - `FastAPI(docs_url=None, redoc_url=None, openapi_url=None)`
   - `/status` returns `{"ok": True}` only.
-  - Before each LLM call: `usage.check` + `usage.record(rec,"llm",1)`; a `CapExceeded` returns 429 `"Johnny's tapped out for today."`
+  - Before each LLM call: `usage.charge(rec,"llm",1)` (check + record in one locked step); a `CapExceeded` returns 429 `"Johnny's tapped out for today."`
   - `groq_answer` failures return 502 `"Johnny's line dropped. Try again."`, and the detail is logged.
 - Modify: `mavis/providers.py`: the `HTTPException(502, f"Groq error: {resp.text}")` detail becomes generic; log `resp.text` to stderr.
 - Test: `mavis/tests/test_guards.py`, extend `tests/test_app.py`
@@ -166,8 +166,8 @@
   - `hello` → `auth.lookup`.
   - Origin check: when the `Origin` header is present and its host differs from `Host`, close 4403.
   - Slots: `guards.CallSlots.acquire(rec.id)`. When busy, send `{"type":"error","message":"Johnny's on another call."}` and close 4429.
-  - `_call_transcribe`: `wav_seconds` → `usage.check(rec,"stt_seconds",secs)` → `check_rate_limit` → STT → `usage.record`.
-  - Answer: `usage.check/record(rec,"llm",1)`. `CapExceeded` → `call.AnswerError(TAPPED_OUT)`, and `usage.audit("cap_hit", ...)`.
+  - `_call_transcribe`: `wav_seconds` → `check_rate_limit` → `usage.charge(rec,"stt_seconds",secs)` → STT.
+  - Answer: `usage.charge(rec,"llm",1)`. `CapExceeded` → `call.AnswerError(TAPPED_OUT)`, and `usage.audit("cap_hit", ...)`.
   - Audit `call_start`, `call_end` (with `seconds`) and `utterance` (with `seconds`).
   - `/johnny/model.glb`: an owner gets `MODEL`. A guest gets `MAVIS_PUBLIC_MODEL` if it is set and exists, **403 if the path requested is the Keanu model**, otherwise 404.
 - Modify: `mavis/call.py`:
@@ -280,7 +280,7 @@
 
   | File | Contents |
   |---|---|
-  | `mavis.service` | User=mavis, `WorkingDirectory=/opt/mavis/mavis`, `EnvironmentFile=/var/lib/mavis/env`, `ExecStart=.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8000 --ws-max-size 1048576`, `Restart=on-failure`, `NoNewPrivileges=yes`, `ProtectSystem=strict`, `StateDirectory=mavis` (= `/var/lib/mavis`), `ProtectHome=yes`, `ReadWritePaths=/opt/mavis/mavis/data`, env sets `MAVIS_KEYS_FILE`/`MAVIS_USAGE_DB`/`MAVIS_AUDIT_LOG` under `/var/lib/mavis`, `PrivateTmp=yes`, `MemoryMax=3G`, `OnFailure=mavis-alert@%n.service` |
+  | `mavis.service` | User=mavis, `WorkingDirectory=/opt/mavis/mavis`, `EnvironmentFile=/var/lib/mavis/env`, `ExecStart=.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8000 --ws-max-size 1048576`, `Restart=on-failure`, `NoNewPrivileges=yes`, `ProtectSystem=strict`, `StateDirectory=mavis` + `StateDirectoryMode=0700` (= `/var/lib/mavis`), `ProtectHome=yes`, `ReadWritePaths=/opt/mavis/mavis/data`, env sets `MAVIS_KEYS_FILE`/`MAVIS_USAGE_DB`/`MAVIS_AUDIT_LOG` under `/var/lib/mavis`, `PrivateTmp=yes`, `MemoryMax=3G`, `OnFailure=mavis-alert@%n.service` |
   | `mavis-alert@.service` | sends an ntfy alert on unit failure |
   | `graywind-sync.service` + `graywind-sync.timer` | every 15 min: `git -C /opt/graywind-state fetch --depth 1 origin main && git reset --hard origin/main`, then run the extractor with `--repo /opt/graywind-state --out /opt/mavis/mavis/data/graywind_grounding.json`. Three consecutive failures send an alert. |
   | `bootstrap.sh` | run once as root over SSH; idempotent; see the list below |

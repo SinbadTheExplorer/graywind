@@ -154,3 +154,17 @@ Found by reading `app.py`, `auth.py`, `call.py`, `call_route.py`, `rate_limit.py
 **After cutover:**
 - Unload the Mac's `com.mavis.backend` LaunchAgent and remove `MAVIS_CALL_WARM=1` from `~/.mavis/env`.
 - The desktop avatar points at the VPS, or stays off. It's untouched otherwise.
+
+## 7. Next, after this ships: three brains (owner-approved 2026-11-10)
+
+This fills Hub v1 done-criterion #2, which was never built. It doesn't move the 11/12 / 11/14 dates.
+
+- **Chain:** Groq (primary) → Cerebras (plan B: same gpt-oss-120b, so the persona doesn't drift; confirm the free tier still exists) → Gemini free tier (plan C: a different vendor). No aggregators (OpenRouter etc.).
+- **Hedged "dual brain":**
+  - Ask Groq first. If no first token arrives within ~0.8 s, also ask Cerebras, and speak whichever starts first. Cancel the other.
+  - Don't race every question. That would spend two free allowances each time.
+- **On failure:** fall back only before the first token. If every brain fails, Johnny says so out loud and an alert fires. `/status` names the brain that answered.
+- **What stays the same:** speech-to-text stays Groq-only. Each brain's use counts against the same `llm` daily caps.
+- **Owner notes:**
+  - The Gemini free tier may use conversations to improve Google's products. The owner accepted this on 11/10.
+  - Everything stays on free tiers. The owner is to confirm there's no card on Groq.
