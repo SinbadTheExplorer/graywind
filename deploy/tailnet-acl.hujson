@@ -1,0 +1,18 @@
+// Paste into https://login.tailscale.com/admin/acls (replacing the default
+// "allow everything" policy), then tag the VPS: Machines -> johnny ->
+// Edit ACL tags -> tag:johnny. Tagged machines also never expire.
+{
+  "tagOwners": {
+    "tag:johnny": ["autogroup:admin"],
+  },
+  "acls": [
+    // Your own devices keep reaching each other as before.
+    {"action": "accept", "src": ["autogroup:member"], "dst": ["autogroup:self:*"]},
+    // Anyone on the tailnet (you, and invited guests later) may call Johnny.
+    {"action": "accept", "src": ["autogroup:member"], "dst": ["tag:johnny:443"]},
+    // Only admins (you) may SSH in.
+    {"action": "accept", "src": ["autogroup:admin"], "dst": ["tag:johnny:22"]},
+    // Nothing lets tag:johnny reach any device: a hacked server can't hop
+    // to your Mac or phone.
+  ],
+}

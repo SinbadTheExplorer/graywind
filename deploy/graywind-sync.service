@@ -1,0 +1,25 @@
+# Pulls Graywind's public repo and rebuilds Johnny's facts about it.
+# Read-only clone over HTTPS: the server holds no GitHub or trading credentials.
+[Unit]
+Description=Refresh Johnny's Graywind facts
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=mavis
+Group=mavis
+# Only the ntfy topic: git and the extractor never see the API keys.
+EnvironmentFile=-/var/lib/mavis/alert.env
+Environment=HOME=/var/lib/mavis
+ExecStart=/opt/mavis/deploy/graywind-sync.sh
+StateDirectory=mavis
+StateDirectoryMode=0700
+UMask=0077
+TimeoutStartSec=300
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+CapabilityBoundingSet=

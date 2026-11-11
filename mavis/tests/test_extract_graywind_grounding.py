@@ -117,3 +117,21 @@ def test_build_facts_includes_watchlist_decisions_and_pending():
 
     pending_fact = next(f for f in facts if f["id"] == "pending-100k-13")
     assert "78.7532" in pending_fact["text"]
+
+
+def test_extractor_honours_repo_and_out_args(tmp_path: Path):
+    import json
+    from extract_graywind_grounding import main
+    repo = tmp_path / "gw"
+    header = ("timestamp,symbol,action,reason,rsi,sma_fast,sma_slow,vix,sentiment,"
+              "days_to_earnings,macro_breaches,sector_gates")
+    for d in (repo / "state", repo / "state" / "small"):
+        d.mkdir(parents=True)
+        write_csv(d / "decision_log.csv", header,
+                  ["2026-11-11T10:00:00-05:00,NVDA,hold,waiting,50,1,2,20,neutral,5,0,0"])
+    (repo / "live_loop.py").write_text('WATCHLIST = ["NVDA"]\n')
+    out = tmp_path / "out" / "facts.json"
+    assert main(["--repo", str(repo), "--out", str(out)]) == 0
+    facts = json.loads(out.read_text())["facts"]
+    assert any("NVDA" in f["text"] for f in facts)
+    assert [p.name for p in out.parent.iterdir()] == ["facts.json"]    # no temp left

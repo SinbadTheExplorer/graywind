@@ -1,0 +1,17 @@
+# Pages the owner's phone when a unit ends up failed (e.g. a restart loop).
+# Instance name = the failed unit. Says what failed, never anything secret.
+[Unit]
+Description=Alert the owner that %i failed
+
+[Service]
+Type=oneshot
+User=mavis
+# Only the ntfy topic: git and the extractor never see the API keys.
+EnvironmentFile=-/var/lib/mavis/alert.env
+ExecStart=/bin/sh -c 'case "$$MAVIS_NTFY_TOPIC" in ""|*[!A-Za-z0-9_-]*) exit 0;; esac; \
+  curl -fsS -m 10 -H "Title: Johnny server problem" -H "Tags: rotating_light" \
+  -d "%i failed on the server. Check: journalctl -u %i" "https://ntfy.sh/$$MAVIS_NTFY_TOPIC" >/dev/null'
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes

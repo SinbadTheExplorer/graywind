@@ -1,0 +1,62 @@
+# Johnny's API and call line. Installed by deploy.sh to /etc/systemd/system.
+# Reached only through `tailscale serve` (HTTPS on the tailnet) -> 127.0.0.1:8000.
+[Unit]
+Description=MAVIS / Johnny backend
+After=network-online.target tailscaled.service
+Wants=network-online.target
+# Restart=on-failure retries quietly; only a restart loop (5 crashes in
+# 5 minutes) marks the unit failed, and that is what pages the owner.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+OnFailure=mavis-alert@%n.service
+
+[Service]
+User=mavis
+Group=mavis
+WorkingDirectory=/opt/mavis/mavis
+EnvironmentFile=/var/lib/mavis/env
+Environment=MAVIS_KEYS_FILE=/var/lib/mavis/keys.json
+Environment=MAVIS_USAGE_DB=/var/lib/mavis/usage.db
+Environment=MAVIS_AUDIT_LOG=/var/lib/mavis/audit.log
+Environment=MAVIS_GRAYWIND_FACTS=/var/lib/mavis/graywind_grounding.json
+Environment=MAVIS_MODEL_DIR=/opt/mavis/models
+Environment=MAVIS_CALL_MODEL=/opt/mavis/models/keanu-web.glb
+Environment=MAVIS_CALL_WARM=1
+Environment=MAVIS_TTS=kokoro
+Environment=HOME=/var/lib/mavis
+# 30 s utterance x 32000 B/s + 128 KiB headroom, as mavis-backend.sh derives it.
+# --no-proxy-headers: keep the real peer (127.0.0.1 = tailscale serve), so
+# guards.identity() trusts serve's Tailscale-User-Login and counts wrong keys
+# per person, not per device.
+ExecStart=/opt/mavis/mavis/.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8000 --ws-max-size 1091072 --no-server-header --no-proxy-headers
+Restart=on-failure
+RestartSec=3
+
+# State: /var/lib/mavis, private to this user (keys, usage, audit, env).
+StateDirectory=mavis
+StateDirectoryMode=0700
+UMask=0077
+
+# Sandbox: the code is read-only, nothing else on the box is visible.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+MemoryMax=3G
+
+[Install]
+WantedBy=multi-user.target

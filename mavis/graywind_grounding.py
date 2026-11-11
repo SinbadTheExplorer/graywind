@@ -1,17 +1,21 @@
 """Keyword-retrieval module for Graywind grounding facts.
 
-The facts are a snapshot produced by scripts/extract_graywind_grounding.py;
-no live reads are performed here.
+The facts are a snapshot produced by scripts/extract_graywind_grounding.py
+(on the server, every 15 minutes by graywind-sync.timer). The file is
+re-read when it changes; a bad or partial file keeps the last good facts.
+No live account read happens here.
 """
 import json
 import os
+import sys
+import threading
 
 from text_scoring import score_overlap, tokenize
 
-_GROUNDING_PATH = os.path.join(os.path.dirname(__file__), "data", "graywind_grounding.json")
-
-with open(_GROUNDING_PATH, encoding="utf-8") as f:
-    _FACTS = json.load(f)["facts"]
+# The server points this at /var/lib/mavis (refreshed by graywind-sync), so
+# the code directory can stay read-only for the service.
+_GROUNDING_PATH = os.environ.get("MAVIS_GRAYWIND_FACTS") or os.path.join(
+    os.path.dirname(__file__), "data", "graywind_grounding.json")
 
 # Fact text is ordinary English prose (e.g. "awaiting manual approval"), so
 # a single overlap on a common word is not a real signal -- same reasoning
@@ -27,8 +31,52 @@ with open(_GROUNDING_PATH, encoding="utf-8") as f:
 # frequency-based rule would wrongly demote the one tag a query about
 # that symbol most needs to hit strong on.
 _STRUCTURAL_TAGS = {"graywind"}
-_STRONG_TERMS = {tag for fact in _FACTS for tag in fact["tags"]} - _STRUCTURAL_TAGS
 MIN_SCORE = 2
+
+_FACTS: list[dict] = []
+_STRONG_TERMS: set[str] = set()
+_lock = threading.Lock()
+_loaded_stamp = None    # (mtime_ns, size) of the file behind _FACTS
+_bad_stamp = None       # the last file that failed to load (warned once)
+
+
+def _valid(data) -> bool:
+    return (isinstance(data, dict) and isinstance(data.get("facts"), list)
+            and all(isinstance(f, dict) and isinstance(f.get("id"), str)
+                    and isinstance(f.get("text"), str) and isinstance(f.get("tags"), list)
+                    and all(isinstance(t, str) for t in f["tags"])
+                    for f in data["facts"]))
+
+
+def _refresh() -> None:
+    """Reload the facts if the file changed; keep the last good ones if not readable."""
+    global _FACTS, _STRONG_TERMS, _loaded_stamp, _bad_stamp
+    try:
+        st = os.stat(_GROUNDING_PATH)
+        stamp = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        stamp = "missing"
+    with _lock:
+        if stamp in (_loaded_stamp, _bad_stamp):
+            return
+        try:
+            if stamp == "missing":
+                raise FileNotFoundError(_GROUNDING_PATH)
+            with open(_GROUNDING_PATH, encoding="utf-8") as f:
+                data = json.load(f)
+            if not _valid(data):
+                raise ValueError("not a {facts: [{id, text, tags}]} file")
+        except (OSError, ValueError) as exc:
+            print(f"graywind_grounding: keeping last good facts ({type(exc).__name__}: {exc})",
+                  file=sys.stderr)
+            _bad_stamp = stamp
+            return
+        _FACTS = data["facts"]
+        _STRONG_TERMS = {tag for fact in _FACTS for tag in fact["tags"]} - _STRUCTURAL_TAGS
+        _loaded_stamp, _bad_stamp = stamp, None
+
+
+_refresh()
 
 
 def retrieve(query: str, top_k: int = 5) -> list[dict]:
@@ -37,15 +85,18 @@ def retrieve(query: str, top_k: int = 5) -> list[dict]:
     scripts/extract_graywind_grounding.py -- no live account read
     happens here or at request time).
     """
+    _refresh()
+    with _lock:    # one generation of facts and strong terms, never a mix
+        facts, strong_terms = _FACTS, _STRONG_TERMS
     query_tokens = tokenize(query)
     if not query_tokens:
         return []
 
     scored = []
-    for fact in _FACTS:
+    for fact in facts:
         haystack_tokens = set(fact["tags"]) | tokenize(fact["text"])
         overlap = query_tokens & haystack_tokens
-        score = score_overlap(overlap, _STRONG_TERMS)
+        score = score_overlap(overlap, strong_terms)
         if score >= MIN_SCORE:
             scored.append((score, {
                 "type": "graywind_fact",

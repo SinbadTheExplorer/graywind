@@ -4,17 +4,22 @@ This script creates `mavis/data/graywind_grounding.json` from Graywind's
 CSV state files. It deliberately excludes `tier_pools.csv` because the
 100k account's pool balances are known-wrong as of 2026-09-15.
 """
+import argparse
 import ast
 import csv
 import json
+import os
 import re
+import sys
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OUT_PATH = Path(__file__).resolve().parents[1] / "data" / "graywind_grounding.json"
+# (account name, its state folder relative to the Graywind checkout)
 ACCOUNTS = [
-    ("100k", REPO_ROOT / "state"),
-    ("small", REPO_ROOT / "state" / "small"),
+    ("100k", Path("state")),
+    ("small", Path("state") / "small"),
 ]
 
 
@@ -96,22 +101,46 @@ def build_facts(accounts_data: list[tuple[str, dict, list[dict]]], watchlist: li
     return facts
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--repo", type=Path, default=REPO_ROOT,
+                        help="Graywind checkout holding state/ and live_loop.py")
+    parser.add_argument("--out", type=Path, default=OUT_PATH,
+                        help="where to write the facts JSON")
+    args = parser.parse_args(argv)
+    repo, out = args.repo, args.out
+
     accounts_data = []
-    for account_name, state_dir in ACCOUNTS:
+    for account_name, rel in ACCOUNTS:
+        state_dir = repo / rel
         latest_decisions = latest_decision_per_symbol(state_dir / "decision_log.csv")
         pending_trades = read_pending_trades(state_dir / "pending_trades.csv")
         accounts_data.append((account_name, latest_decisions, pending_trades))
 
-    watchlist = extract_watchlist(REPO_ROOT / "live_loop.py")
+    watchlist = extract_watchlist(repo / "live_loop.py")
     facts = build_facts(accounts_data, watchlist)
 
-    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with OUT_PATH.open("w") as f:
-        json.dump({"facts": facts}, f, indent=2)
-        f.write("\n")
-    print(f"wrote {len(facts)} facts to {OUT_PATH}")
+    # Written to a temp file and renamed into place, so the server's reload
+    # never sees a half-written file.
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=out.parent,
+                                         delete=False, suffix=".tmp") as tf:
+            tmp_path = tf.name
+            json.dump({"facts": facts}, tf, indent=2)
+            tf.write("\n")
+            tf.flush()
+            os.fsync(tf.fileno())
+        os.chmod(tmp_path, 0o644)
+        os.replace(tmp_path, out)
+    except BaseException:
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
+    print(f"wrote {len(facts)} facts to {out}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

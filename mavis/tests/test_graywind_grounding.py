@@ -55,3 +55,43 @@ def test_format_context_includes_hit_text():
     context = graywind_grounding.format_context(hits)
 
     assert "AAPL, SERV" in context
+
+
+def _point_at(tmp_path, monkeypatch, facts):
+    import json
+    path = tmp_path / "gg.json"
+    path.write_text(json.dumps({"facts": facts}))
+    monkeypatch.setattr(graywind_grounding, "_GROUNDING_PATH", str(path))
+    monkeypatch.setattr(graywind_grounding, "_loaded_stamp", None)
+    monkeypatch.setattr(graywind_grounding, "_bad_stamp", None)
+    monkeypatch.setattr(graywind_grounding, "_FACTS", [])
+    monkeypatch.setattr(graywind_grounding, "_STRONG_TERMS", set())
+    return path
+
+
+def _fact(sym):
+    return {"id": f"d-{sym}", "tags": ["decision", "graywind", sym.lower()],
+            "text": f"Most recent decision for {sym}: hold."}
+
+
+def test_facts_reload_on_mtime_change(tmp_path, monkeypatch):
+    import json, os
+    path = _point_at(tmp_path, monkeypatch, [_fact("NVDA")])
+    assert graywind_grounding.retrieve("nvda decision")
+    path.write_text(json.dumps({"facts": [_fact("TSLA"), _fact("AMD")]}))
+    os.utime(path, ns=(1, 2_000_000_000_000_000_000))
+    ids = {h["id"] for h in graywind_grounding.retrieve("nvda tsla amd decision")}
+    assert ids == {"d-TSLA", "d-AMD"}
+
+
+def test_corrupt_file_keeps_last_good_facts(tmp_path, monkeypatch, capsys):
+    import os
+    path = _point_at(tmp_path, monkeypatch, [_fact("NVDA")])
+    assert graywind_grounding.retrieve("nvda decision")
+    path.write_text('{"facts": [ {"id": "half-writ')
+    os.utime(path, ns=(1, 2_000_000_000_000_000_000))
+    assert graywind_grounding.retrieve("nvda decision")
+    graywind_grounding.retrieve("nvda decision")
+    assert capsys.readouterr().err.count("keeping last good facts") == 1    # warned once
+    path.unlink()
+    assert graywind_grounding.retrieve("nvda decision")

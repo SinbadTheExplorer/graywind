@@ -1,0 +1,12 @@
+# The Linux server (Contabo VPS): just the API, the /call line and Johnny's
+# Kokoro voice. No desktop avatar (panda3d), wake word (openwakeword), mic
+# (sounddevice), webcam (opencv) or MCP wrapper -- tests/test_server_deploy.py
+# checks the app runs without them. Pinned to the versions tested on the Mac.
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+httpx==0.28.1
+numpy==2.5.3
+kokoro-onnx==0.4.7
+onnxruntime==1.30.0
+# avatar/tts.py writes WAVs with scipy.io.wavfile.
+scipy==1.18.1
