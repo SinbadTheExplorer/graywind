@@ -104,7 +104,9 @@ async def ask(req: AskRequest, rec: auth.KeyRecord = Depends(auth.require_api_ke
     check_rate_limit(rec.id, rec.per_minute)
 
     bullion_hits = grounding.retrieve(req.query)
-    graywind_hits = graywind_grounding.retrieve(req.query)
+    # The owner's own portfolio facts: never for a guest (see _answer_events).
+    graywind_hits = (graywind_grounding.retrieve(req.query)
+                     if rec.scope == "owner" else [])
 
     context = "\n\n".join(filter(None, [
         grounding.format_context(bullion_hits),
@@ -115,7 +117,11 @@ async def ask(req: AskRequest, rec: auth.KeyRecord = Depends(auth.require_api_ke
     # general knowledge in exactly the same confident tone, and for a question
     # about the owner's own system that is worse than silence -- he cannot
     # hear the difference, and there are no citations to warn him.
-    if not context and graywind_grounding.names_project_internals(req.query):
+    # A guest asking about the owner's projects is refused even when some
+    # unrelated context matched: otherwise the model answers from general
+    # knowledge in the same confident tone.
+    if graywind_grounding.names_project_internals(req.query) and (
+            not context or rec.scope != "owner"):
         return {
             "answer": graywind_grounding.UNGROUNDED,
             "citations": [],
@@ -167,14 +173,19 @@ async def _answer_events(query: str, max_chars: int | None, rec):
         refusal = None if context else news.UNAVAILABLE
     else:
         bullion_hits = grounding.retrieve(query)
-        graywind_hits = graywind_grounding.retrieve(query)
+        # Graywind's facts are the owner's own portfolio. A guest never gets
+        # them, however the question is worded: the retrieval is skipped, not
+        # keyword-filtered.
+        graywind_hits = (graywind_grounding.retrieve(query)
+                         if rec.scope == "owner" else [])
         hits = bullion_hits + graywind_hits
         context = "\n\n".join(filter(None, [
             grounding.format_context(bullion_hits),
             graywind_grounding.format_context(graywind_hits),
         ])) or None
         refusal = (graywind_grounding.UNGROUNDED
-                   if not context and graywind_grounding.names_project_internals(query)
+                   if graywind_grounding.names_project_internals(query)
+                   and (not context or rec.scope != "owner")
                    else None)
     if refusal:
         yield dict(delta=refusal)

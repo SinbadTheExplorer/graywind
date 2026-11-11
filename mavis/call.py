@@ -28,6 +28,15 @@ class ClientGone(Exception):
     """A send failed: the browser has left."""
 
 
+# The only text a caller sees for an unexpected failure. AnswerError messages
+# are deliberate copy and pass through; anything else stays in the server log.
+GENERIC_ERROR = "Johnny's line dropped. Try again."
+
+
+def _caller_message(exc: BaseException) -> str:
+    return str(exc) if isinstance(exc, AnswerError) else GENERIC_ERROR
+
+
 def _stderr(msg: str) -> None:
     print(msg, file=sys.stderr)
 
@@ -41,6 +50,10 @@ class CallDeps:
     is_dismissal: Callable[[str], bool]
     make_cutter: Callable[[], Any]                # .push(text) / .flush() -> sentences
     filler_after: float = 2.0
+    # A call ends at max_seconds, or after idle_seconds with no utterance
+    # (counted from the last utterance or the end of Johnny's last answer).
+    max_seconds: float = 900.0
+    idle_seconds: float = 120.0
     clock: Callable[[], float] = time.monotonic
     log: Callable[[str], None] = field(default=_stderr)
 
@@ -83,7 +96,7 @@ async def _produce(question: str, deps: CallDeps, queue: asyncio.Queue) -> None:
         await queue.put(("error", str(exc), None))
     except Exception as exc:  # noqa: BLE001 -- reported to the caller, not raised
         deps.log(f"call: answer failed: {type(exc).__name__}: {exc}")
-        await queue.put(("error", f"{type(exc).__name__}: {exc}", None))
+        await queue.put(("error", GENERIC_ERROR, None))
     # Not in a `finally`: a cancelled producer must stop, not keep synthesising.
     await queue.put(_DONE)
 
@@ -132,7 +145,9 @@ async def _turn(wav: bytes, deps: CallDeps, ws) -> bool:
     try:
         text = await deps.transcribe(wav)
     except Exception as exc:  # noqa: BLE001
-        await _send_json(ws, {"type": "error", "message": str(exc)})
+        if not isinstance(exc, AnswerError):
+            deps.log(f"call: transcribe failed: {type(exc).__name__}: {exc}")
+        await _send_json(ws, {"type": "error", "message": _caller_message(exc)})
         await _send_json(ws, {"type": "state", "state": "listening"})
         return False
 
@@ -170,9 +185,14 @@ async def _cancel(task) -> None:
             await task
 
 
-async def run_call(ws, deps: CallDeps) -> None:
-    """Run one call on an accepted, authenticated WebSocket until it ends."""
+async def run_call(ws, deps: CallDeps) -> str:
+    """Run one call on an accepted, authenticated WebSocket until it ends.
+
+    Returns why it ended: "end", "dismissal", "closed", "gone", "time",
+    "idle" or "failed" (for the audit log).
+    """
     start = deps.clock()
+    last_activity = start
     receiving = turn = None
     try:
         await _send_json(ws, {"type": "state", "state": "speaking"})
@@ -183,33 +203,53 @@ async def run_call(ws, deps: CallDeps) -> None:
         deps.log(f"call: greeting sent in {int((deps.clock() - start) * 1000)} ms")
 
         while True:
+            now = deps.clock()
+            if now - start >= deps.max_seconds:
+                deps.log("call: ended, time limit")
+                await _cancel(turn)
+                turn = None
+                await _send_json(ws, {"type": "bye", "reason": "time"})
+                return "time"
+            if turn is None and now - last_activity >= deps.idle_seconds:
+                deps.log("call: ended, idle")
+                await _send_json(ws, {"type": "bye", "reason": "idle"})
+                return "idle"
+            limit = deps.max_seconds - (now - start)
+            if turn is None:
+                limit = min(limit, deps.idle_seconds - (now - last_activity))
+
             if receiving is None:
                 receiving = asyncio.create_task(ws.receive())
             waiting = {receiving} | ({turn} if turn else set())
-            done, _ = await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
+            done, _ = await asyncio.wait(waiting, timeout=max(0.0, limit),
+                                         return_when=asyncio.FIRST_COMPLETED)
+            if not done:
+                continue    # a limit passed; the top of the loop ends the call
 
             if turn in done:
                 finished, turn = turn, None
+                last_activity = deps.clock()
                 exc = finished.exception()
                 if isinstance(exc, ClientGone):
                     raise exc
                 if exc is not None:
                     deps.log(f"call: failed: {type(exc).__name__}: {exc}")
-                    await _send_json(ws, {"type": "error", "message": str(exc)})
+                    await _send_json(ws, {"type": "error", "message": _caller_message(exc)})
                     await _send_json(ws, {"type": "state", "state": "listening"})
                 elif finished.result():
                     deps.log("call: ended by caller (dismissal)")
-                    return
+                    return "dismissal"
 
             if receiving in done:
                 msg, receiving = receiving.result(), None
                 if msg.get("type") == "websocket.disconnect":
                     deps.log("call: closed")
-                    return
+                    return "closed"
                 if msg.get("bytes") is not None:
                     if turn is not None:
                         deps.log("call: utterance ignored, busy")
                     else:
+                        last_activity = deps.clock()
                         turn = asyncio.create_task(_turn(msg["bytes"], deps, ws))
                 elif msg.get("text") is not None:
                     try:
@@ -221,13 +261,15 @@ async def run_call(ws, deps: CallDeps) -> None:
                         turn = None
                         await _send_json(ws, {"type": "bye"})
                         deps.log("call: ended by caller (end button)")
-                        return
+                        return "end"
     except ClientGone:
         deps.log("call: client gone")
+        return "gone"
     except Exception as exc:  # noqa: BLE001 -- a call must never crash the server
         deps.log(f"call: failed: {type(exc).__name__}: {exc}")
         with contextlib.suppress(Exception):
-            await ws.send_json({"type": "error", "message": str(exc)})
+            await ws.send_json({"type": "error", "message": GENERIC_ERROR})
+        return "failed"
     finally:
         await _cancel(turn)
         await _cancel(receiving)

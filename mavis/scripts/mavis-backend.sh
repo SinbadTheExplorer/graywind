@@ -30,4 +30,10 @@ if [ -z "${MAVIS_API_KEY:-}" ]; then
 fi
 
 cd "$MAVIS_DIR"
-exec .venv/bin/uvicorn app:app --port "${MAVIS_PORT:-8000}"
+# Cap each WebSocket message (one utterance): uvicorn's default is 16 MiB.
+# Derived from the longest allowed utterance (16 kHz 16-bit = 32000 bytes/s)
+# plus headroom, so a long-but-allowed utterance gets the polite refusal from
+# guards.py rather than uvicorn dropping the whole call.
+MAX_S="${MAVIS_MAX_UTTERANCE_SECONDS:-30}"
+WS_MAX="${MAVIS_WS_MAX_BYTES:-$(( ${MAX_S%.*} * 32000 + 131072 ))}"
+exec .venv/bin/uvicorn app:app --port "${MAVIS_PORT:-8000}" --ws-max-size "$WS_MAX"

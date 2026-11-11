@@ -11,6 +11,10 @@ class BadAudio(ValueError):
     """Raised when a WAV file does not meet the required constraints."""
 
 
+class TooLong(BadAudio):
+    """A valid recording, just longer than MAX_UTTERANCE_SECONDS."""
+
+
 def _header(n_bytes: int) -> bytes:
     """A canonical 44-byte header for 16 kHz mono 16-bit PCM."""
     return (b"RIFF" + struct.pack("<I", 36 + n_bytes) + b"WAVE"
@@ -102,7 +106,7 @@ def normalize_wav(data: bytes, max_seconds: float | None = None) -> tuple[bytes,
     seconds = audio_bytes / 32000.0  # 16kHz mono 16‑bit → 32 000 bytes per second
     limit = max_seconds if max_seconds is not None else MAX_UTTERANCE_SECONDS
     if seconds > limit:
-        raise BadAudio("utterance too long")
+        raise TooLong("utterance too long")
     return _header(audio_bytes) + data[audio_start:audio_start + audio_bytes], seconds
 
 
@@ -121,3 +125,39 @@ def env_number(name: str, default: float, minimum: float = 0) -> float:
         print(f"guards: bad {name}={raw!r}, using {default}", file=sys.stderr)
         return default
     return value
+
+
+class CallSlots:
+    """How many calls may run at once: in total, and per key.
+
+    Kokoro is CPU-heavy, and a small server freezes under a few parallel
+    calls, so the extra ones are turned away instead.
+    """
+
+    def __init__(self, max_total: int, max_per_key: int = 1):
+        import threading
+        self.max_total, self.max_per_key = max_total, max_per_key
+        self._active: dict[str, int] = {}
+        self._lock = threading.Lock()
+
+    def acquire(self, key_id: str, owner: bool = False) -> bool:
+        """The owner is never turned away for lack of room: guests can't lock
+        him out of his own server. Everyone gets one call per key."""
+        with self._lock:
+            if not owner and sum(self._active.values()) >= self.max_total:
+                return False
+            if self._active.get(key_id, 0) >= self.max_per_key:
+                return False
+            self._active[key_id] = self._active.get(key_id, 0) + 1
+            return True
+
+    def release(self, key_id: str) -> None:
+        with self._lock:
+            left = self._active.get(key_id, 0) - 1
+            if left > 0:
+                self._active[key_id] = left
+            else:
+                self._active.pop(key_id, None)
+
+
+SLOTS = CallSlots(max_total=int(env_number("MAVIS_MAX_CALLS", 2, minimum=1)))

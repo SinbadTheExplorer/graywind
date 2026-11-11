@@ -194,3 +194,17 @@ def test_env_number_falls_back(monkeypatch):
         assert env_number("X_TEST_NUM", 500, minimum=1) == 500
     monkeypatch.setenv("X_TEST_NUM", "300")
     assert env_number("X_TEST_NUM", 500, minimum=1) == 300
+
+
+def test_call_slots_total_and_per_key():
+    from guards import CallSlots
+    slots = CallSlots(max_total=2, max_per_key=1)
+    assert slots.acquire("a")
+    assert not slots.acquire("a")      # one call per key
+    assert slots.acquire("b")
+    assert not slots.acquire("c")      # two in total
+    slots.release("a")
+    assert slots.acquire("c")
+    slots.release("b"); slots.release("c")
+    slots.release("nobody")            # harmless
+    assert slots.acquire("a")

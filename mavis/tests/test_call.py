@@ -86,6 +86,8 @@ def make_deps(**over):
         is_dismissal=over.get("is_dismissal", default_is_dismissal),
         make_cutter=over.get("make_cutter", default_make_cutter),
         filler_after=over.get("filler_after", 2.0),
+        max_seconds=over.get("max_seconds", 900.0),
+        idle_seconds=over.get("idle_seconds", 120.0),
         clock=over.get("clock", time.monotonic),
         log=over.get("log", lambda *_: None),
     )
@@ -269,12 +271,13 @@ async def test_answer_error_is_reported_and_call_continues():
 
 async def test_transcribe_failure_is_reported_and_call_continues():
     async def bad_transcribe(_):
-        raise ValueError("bad transcription")
+        raise ValueError("bad transcription at /srv/secret/path")
 
     ws = FakeWS()
     task = asyncio.create_task(call.run_call(ws, make_deps(transcribe=bad_transcribe)))
     ws._in.put_nowait({"type": "websocket.receive", "bytes": b"wav"})
-    await wait_for_sent(ws, ("json", {"type": "error", "message": "bad transcription"}))
+    # The internal detail stays in the log; the caller hears the generic line.
+    await wait_for_sent(ws, ("json", {"type": "error", "message": call.GENERIC_ERROR}))
     await asyncio.sleep(0.02)
     ws._in.put_nowait({"type": "websocket.disconnect"})
     await asyncio.wait_for(task, 2)
@@ -347,3 +350,63 @@ async def test_no_tasks_left_after_hang_up_mid_turn():
 
     leaked = {t for t in asyncio.all_tasks() if not t.done()} - before
     assert not leaked, f"leaked tasks: {leaked}"
+
+
+async def test_internal_exception_text_never_reaches_the_caller():
+    async def answer(_):
+        raise RuntimeError("Traceback: /opt/mavis/providers.py key=gsk_123")
+        yield  # pragma: no cover
+
+    sent = await one_turn(FakeWS(), make_deps(transcribe=said("hello"), answer=answer))
+    errors = [m for kind, m in sent if kind == "json" and m.get("type") == "error"]
+    assert errors == [{"type": "error", "message": call.GENERIC_ERROR}]
+
+
+async def test_answer_error_copy_passes_through_from_transcribe():
+    async def capped(_):
+        raise call.AnswerError("I'm tapped out for today, choom. Call me tomorrow.")
+
+    ws = FakeWS()
+    task = asyncio.create_task(call.run_call(ws, make_deps(transcribe=capped)))
+    ws._in.put_nowait({"type": "websocket.receive", "bytes": b"wav"})
+    await wait_for_sent(ws, ("json", {"type": "error",
+                         "message": "I'm tapped out for today, choom. Call me tomorrow."}))
+    ws._in.put_nowait({"type": "websocket.disconnect"})
+    await asyncio.wait_for(task, 2)
+
+
+async def test_call_ends_after_idle_seconds():
+    ws = FakeWS()
+    reason = await asyncio.wait_for(
+        call.run_call(ws, make_deps(idle_seconds=0.05)), timeout=2)
+    assert reason == "idle"
+    assert messages(ws)[-1] == ("json", {"type": "bye", "reason": "idle"})
+
+
+async def test_utterances_keep_the_call_alive_past_idle():
+    ws = FakeWS()
+    task = asyncio.create_task(call.run_call(ws, make_deps(idle_seconds=0.15)))
+    for _ in range(3):
+        await asyncio.sleep(0.08)
+        ws._in.put_nowait({"type": "websocket.receive", "bytes": b"wav"})
+    assert not task.done()
+    reason = await asyncio.wait_for(task, timeout=2)
+    assert reason == "idle"
+
+
+async def test_call_ends_at_max_seconds_even_mid_answer():
+    flag = {"cancelled": False}
+    ws = FakeWS()
+    deps = make_deps(transcribe=said("hello"), answer=_endless_answer(flag),
+                     max_seconds=0.2, idle_seconds=60)
+    task = asyncio.create_task(call.run_call(ws, deps))
+    ws._in.put_nowait({"type": "websocket.receive", "bytes": b"wav"})
+    reason = await asyncio.wait_for(task, timeout=2)
+    assert reason == "time"
+    assert messages(ws)[-1] == ("json", {"type": "bye", "reason": "time"})
+
+
+async def test_run_call_reports_why_it_ended():
+    ws = FakeWS()
+    ws._in.put_nowait({"type": "websocket.receive", "text": '{"type": "end"}'})
+    assert await asyncio.wait_for(call.run_call(ws, make_deps()), 2) == "end"
