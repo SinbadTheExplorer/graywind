@@ -1,0 +1,17 @@
+{
+  "name": "Johnny",
+  "short_name": "Johnny",
+  "description": "Call Johnny.",
+  "id": "/johnny",
+  "start_url": "/johnny",
+  "scope": "/johnny",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#07080c",
+  "theme_color": "#07080c",
+  "icons": [
+    {"src": "/johnny/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+    {"src": "/johnny/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+    {"src": "/johnny/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ]
+}

@@ -146,16 +146,43 @@ def call_page(request: Request):
     })
 
 
-# The page's own scripts. Only these names are served from web/.
-PAGE_SCRIPTS = {"call.js", "worklet.js"}
+# The page's own files: only these are served from web/, each with its type.
+# All no-cache (they are tiny, and a changed icon must show up at once).
+PAGE_FILES = {
+    "call.js": "text/javascript",
+    "worklet.js": "text/javascript",
+    "manifest.webmanifest": "application/manifest+json",
+    "icons/icon-192.png": "image/png",
+    "icons/icon-512.png": "image/png",
+    "icons/icon-maskable-512.png": "image/png",
+    "icons/apple-touch-icon.png": "image/png",
+    "icons/favicon-32.png": "image/png",
+    "fonts/johnny-title.woff2": "font/woff2",
+}
+
+
+def _page_file(name: str):
+    if name not in PAGE_FILES:
+        raise HTTPException(404)
+    return FileResponse(WEB / name, media_type=PAGE_FILES[name],
+                        headers={"Cache-Control": "no-cache"})
 
 
 @router.get("/johnny/{name}.js", include_in_schema=False)
 def call_script(name: str):
-    if f"{name}.js" not in PAGE_SCRIPTS:
-        raise HTTPException(404)
-    return FileResponse(WEB / f"{name}.js", media_type="text/javascript",
-                        headers={"Cache-Control": "no-cache"})
+    return _page_file(f"{name}.js")
+
+
+@router.get("/johnny/manifest.webmanifest", include_in_schema=False)
+def call_manifest():
+    return _page_file("manifest.webmanifest")
+
+
+@router.get("/johnny/{folder}/{name}", include_in_schema=False)
+def call_asset(folder: str, name: str):
+    return _page_file(f"{folder}/{name}")
+
+
 
 
 

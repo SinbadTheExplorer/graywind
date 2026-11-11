@@ -5,6 +5,13 @@
 <title>Call Johnny</title>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#07080c">
+<link rel="manifest" href="/johnny/manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="32x32" href="/johnny/icons/favicon-32.png">
+<link rel="apple-touch-icon" href="/johnny/icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Johnny">
 <style>
 :root{
   --bg:#07080c; --text:#e8e8f0; --muted:#8a8aa0; --accent:#ff2a6d; --cyan:#05d9e8;
@@ -21,7 +28,12 @@ body.idle #stage{filter:brightness(.45)}
 .hidden{display:none!important}
 .card{background:var(--card);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);
   border:1px solid rgba(255,255,255,.06);border-radius:20px;padding:28px 24px;width:min(340px,100%);text-align:center}
-.card h1{margin:0 0 4px;font-size:28px;letter-spacing:.02em}
+/* Brush-calligraphy title (Ma Shan Zheng, SIL OFL; web/fonts/OFL.txt).
+   Self-hosted subset of just J-o-h-n-y, so the CSP needs no font host. */
+@font-face{font-family:'Johnny Title';src:url(/johnny/fonts/johnny-title.woff2) format('woff2');font-display:swap}
+/* Only the letters J-o-h-n-y exist in this font: use it for the name alone. */
+.card h1.title{margin:0 0 4px;font:400 44px/1.1 'Johnny Title',serif;letter-spacing:.04em;color:#caa25f;
+  text-shadow:0 0 18px rgba(202,162,95,.25)}
 .card p{margin:0 0 22px;color:var(--muted)}
 .card input{width:100%;padding:12px 14px;border-radius:12px;border:1px solid #2a2a3a;background:#0e0e18;color:var(--text);font-size:16px}
 .round{width:76px;height:76px;border-radius:50%;border:0;color:#fff;font-size:15px;font-weight:600;cursor:pointer;
@@ -65,7 +77,7 @@ footer{position:fixed;left:0;right:0;bottom:calc(6px + env(safe-area-inset-botto
 
 <div id="screen-key" class="screen hidden">
   <div class="card">
-    <h1>Johnny</h1>
+    <h1 class="title">Johnny</h1>
     <p>Enter your MAVIS key once. It stays on this device.</p>
     <input id="keyInput" type="password" autocomplete="current-password" placeholder="Key" aria-label="Key">
     <button id="saveKey" class="btn">Save</button>
@@ -75,7 +87,7 @@ footer{position:fixed;left:0;right:0;bottom:calc(6px + env(safe-area-inset-botto
 
 <div id="screen-idle" class="screen hidden">
   <div class="card">
-    <h1>Johnny</h1>
+    <h1 class="title">Johnny</h1>
     <p>Your fixer. Mostly sober.</p>
     <button id="callBtn" class="round call" aria-label="Call Johnny">Call</button>
     <div id="loading">loading Johnny…</div>

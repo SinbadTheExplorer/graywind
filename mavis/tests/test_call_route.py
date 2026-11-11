@@ -676,3 +676,46 @@ def test_api_responses_get_basic_headers_but_no_csp():
     for resp in (_client().get("/status"), _client().get("/johnny/check")):
         assert resp.headers["x-content-type-options"] == "nosniff"
         assert "content-security-policy" not in resp.headers
+
+
+
+# --- Installable app (web manifest, icons, title font) ---
+
+def test_manifest_makes_an_installable_app():
+    import json
+    resp = _client().get("/johnny/manifest.webmanifest")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("application/manifest+json")
+    m = json.loads(resp.text)
+    assert m["display"] == "standalone" and m["start_url"] == "/johnny"
+    sizes = {i["sizes"] for i in m["icons"]}
+    assert any(i.get("purpose") == "maskable" for i in m["icons"])
+    assert {"192x192", "512x512"} <= sizes
+    for icon in m["icons"]:    # every icon it names is actually served
+        r = _client().get(icon["src"])
+        assert r.status_code == 200 and r.content[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_page_links_manifest_icon_and_font():
+    html = _client().get("/johnny").text
+    for path in ("/johnny/manifest.webmanifest", "/johnny/icons/apple-touch-icon.png",
+                 "/johnny/fonts/johnny-title.woff2"):
+        assert path in html
+        assert _client().get(path).status_code == 200
+
+
+def test_title_font_ships_with_its_license():
+    assert (call_route.WEB / "fonts" / "OFL.txt").read_text().startswith("Copyright")
+    assert _client().get("/johnny/fonts/johnny-title.woff2").headers["content-type"] == "font/woff2"
+
+
+def test_unlisted_page_files_are_404():
+    for path in ("/johnny/icons/..%2Fcall.html", "/johnny/icons/x.png", "/johnny/fonts/OFL.txt",
+                 "/johnny/fonts/..%2F..%2Fapp.py", "/johnny/vendor%2F..%2F..%2Fapp.py"):
+        assert _client().get(path).status_code == 404, path
+    # and straight at the gate, with no URL clean-up in between
+    import pytest as _pytest
+    from fastapi import HTTPException as _HE
+    for name in ("icons/../call.html", "../app.py", "fonts/OFL.txt"):
+        with _pytest.raises(_HE):
+            call_route._page_file(name)
