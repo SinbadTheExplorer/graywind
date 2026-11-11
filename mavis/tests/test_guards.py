@@ -1,6 +1,7 @@
 import os
 import struct
 import pytest
+import guards
 
 from guards import wav_seconds, BadAudio, MAX_UTTERANCE_SECONDS
 
@@ -208,3 +209,101 @@ def test_call_slots_total_and_per_key():
     slots.release("b"); slots.release("c")
     slots.release("nobody")            # harmless
     assert slots.acquire("a")
+
+
+# --- Failed-key lockout ---
+
+class _Clock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+def test_five_failures_lock_identity():
+    lock = guards.Lockout(clock=_Clock())
+    assert [lock.fail("ip:1.2.3.4") for _ in range(5)] == [False] * 4 + [True]
+    assert lock.locked("ip:1.2.3.4")
+    assert not lock.locked("ip:5.6.7.8")    # others are untouched
+
+
+def test_failures_outside_the_window_do_not_add_up():
+    clock = _Clock()
+    lock = guards.Lockout(clock=clock)
+    for _ in range(4):
+        lock.fail("ip:a")
+    clock.now += 601
+    assert lock.fail("ip:a") is False
+    assert not lock.locked("ip:a")
+
+
+def test_lock_expires_after_600s():
+    clock = _Clock()
+    lock = guards.Lockout(clock=clock)
+    for _ in range(5):
+        lock.fail("ip:a")
+    clock.now += 599
+    assert lock.locked("ip:a")
+    clock.now += 2
+    assert not lock.locked("ip:a")
+    assert lock.fail("ip:a") is False    # the count starts over
+
+
+class _Conn:
+    def __init__(self, host, headers=None):
+        from types import SimpleNamespace
+        self.client = SimpleNamespace(host=host) if host else None
+        self.headers = headers or {}
+
+
+def test_identity_prefers_tailscale_header():
+    headers = {"tailscale-user-login": "me@example.com"}
+    assert guards.identity(_Conn("127.0.0.1", headers)) == "ts:me@example.com"
+    assert guards.identity(_Conn("127.0.0.1")) == "ip:127.0.0.1"
+    assert guards.identity(_Conn(None)) == "ip:unknown"
+    assert guards.identity(None) == "ip:unknown"
+
+
+@pytest.mark.parametrize("host", ["::1", "::ffff:127.0.0.1", "127.0.0.2"])
+def test_identity_trusts_header_from_any_loopback_form(host):
+    assert guards.identity(_Conn(host, {"tailscale-user-login": "me@x"})) == "ts:me@x"
+
+
+def test_identity_ignores_tailscale_header_not_from_local_proxy():
+    # A direct caller could type any login to dodge the count or frame someone.
+    conn = _Conn("100.64.0.9", {"tailscale-user-login": "owner@x"})
+    assert guards.identity(conn) == "ip:100.64.0.9"
+
+
+def test_lockout_memory_is_bounded(monkeypatch):
+    lock = guards.Lockout(clock=_Clock())
+    monkeypatch.setattr(guards.Lockout, "MAX_TRACKED", 10)
+    for i in range(50):
+        lock.fail(f"ip:{i}")
+    assert len(lock._fails) <= 10
+
+
+def test_locked_identities_are_pruned_too(monkeypatch):
+    clock = _Clock()
+    lock = guards.Lockout(clock=clock)
+    monkeypatch.setattr(guards.Lockout, "MAX_TRACKED", 10)
+    for i in range(30):
+        for _ in range(5):
+            lock.fail(f"ip:{i}")
+        clock.now += 700    # each lock has expired before the next begins
+    assert len(lock._fails) + len(lock._until) <= 11
+
+
+def test_flood_of_new_names_does_not_reset_an_active_guesser(monkeypatch):
+    clock = _Clock()
+    lock = guards.Lockout(clock=clock)
+    monkeypatch.setattr(guards.Lockout, "MAX_TRACKED", 10)
+    lock.fail("ip:attacker")
+    for i in range(9):
+        lock.fail(f"ip:decoy{i}")
+    for _ in range(3):
+        lock.fail("ip:attacker")    # 4 failures, now newest
+    for i in range(5):
+        lock.fail(f"ip:flood{i}")   # forces evictions
+    assert lock.fail("ip:attacker") is True

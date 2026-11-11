@@ -161,3 +161,103 @@ class CallSlots:
 
 
 SLOTS = CallSlots(max_total=int(env_number("MAVIS_MAX_CALLS", 2, minimum=1)))
+
+
+# --- Failed-key lockout -----------------------------------------------------
+
+_IDENT_CHARS = 120
+
+
+def _is_loopback(host: str | None) -> bool:
+    import ipaddress
+    try:
+        addr = ipaddress.ip_address(host or "")
+    except ValueError:
+        return False
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
+        addr = addr.ipv4_mapped
+    return addr.is_loopback
+
+
+def identity(conn) -> str:
+    """Who is knocking, for counting wrong keys. `conn` is a Request or a
+    WebSocket (or None).
+
+    Behind `tailscale serve` every request comes from localhost, so the
+    address can't tell callers apart; the Tailscale login can. The login
+    header is trusted only from the local proxy (a loopback address), so a
+    direct caller can't pick a name to dodge the count or frame someone.
+    """
+    if conn is None:
+        return "ip:unknown"
+    host = conn.client.host if conn.client else None
+    login = (conn.headers.get("tailscale-user-login") or "").strip()
+    if login and _is_loopback(host):
+        return "ts:" + login[:_IDENT_CHARS]
+    return "ip:" + (host or "unknown")[:_IDENT_CHARS]
+
+
+class Lockout:
+    """`max_failures` wrong keys within `window` seconds locks an identity
+    out for `lock_seconds`. A right key does not reset the count, so a
+    guest can't mix in their own key to keep guessing."""
+
+    MAX_TRACKED = 10_000    # identities held at once; old ones are dropped
+
+    def __init__(self, max_failures: int = 5, window: float = 600,
+                 lock_seconds: float = 600, clock=None):
+        import threading
+        import time
+        self.max_failures, self.window, self.lock_seconds = max_failures, window, lock_seconds
+        self._clock = clock or time.monotonic
+        self._fails: dict[str, list[float]] = {}
+        self._until: dict[str, float] = {}
+        self._lock = threading.Lock()
+
+    def locked(self, ident: str) -> bool:
+        with self._lock:
+            until = self._until.get(ident)
+            if until is None:
+                return False
+            if self._clock() >= until:
+                del self._until[ident]
+                return False
+            return True
+
+    def fail(self, ident: str) -> bool:
+        """Count one wrong key. True only when this one starts a lock."""
+        with self._lock:
+            now = self._clock()
+            if self._until.get(ident, 0) > now:
+                return False    # already locked
+            recent = [t for t in self._fails.pop(ident, []) if now - t < self.window]
+            recent.append(now)
+            if len(recent) >= self.max_failures:
+                self._until[ident] = now + self.lock_seconds
+                locked = True
+            else:
+                # Popped and re-added, so the dict stays oldest-failure-first
+                # and an identity still guessing is the last to be dropped.
+                self._fails[ident] = recent
+                locked = False
+            if len(self._fails) + len(self._until) > self.MAX_TRACKED:
+                self._prune(now)
+            return locked
+
+    def _prune(self, now: float) -> None:
+        self._fails = {i: ts for i, ts in self._fails.items() if now - ts[-1] < self.window}
+        self._until = {i: u for i, u in self._until.items() if u > now}
+        while self._fails and len(self._fails) + len(self._until) > self.MAX_TRACKED:
+            self._fails.pop(next(iter(self._fails)))    # a flood of fresh names
+
+    def reset(self) -> None:
+        with self._lock:
+            self._fails.clear()
+            self._until.clear()
+
+
+LOCKOUT = Lockout(
+    max_failures=int(env_number("MAVIS_LOCKOUT_FAILURES", 5, minimum=1)),
+    window=env_number("MAVIS_LOCKOUT_WINDOW_SECONDS", 600, minimum=1),
+    lock_seconds=env_number("MAVIS_LOCKOUT_SECONDS", 600, minimum=1),
+)

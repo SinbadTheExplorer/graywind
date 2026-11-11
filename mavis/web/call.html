@@ -453,7 +453,9 @@ function openCall(){
     if (S.ws !== ws) return;               // a call we already ended
     if (e.code === 4401) { storeClear(); endCall(false); show('screen-key'); $('keyError').textContent = 'Wrong key'; return; }
     if (S.endAfterPlayback) return;        // he said bye; let him finish
-    if (S.inCall) { toast(e.code === 1011 ? 'Server not set up' : 'Call dropped'); endCall(false); }
+    const why = {1011: 'Server not set up', 4423: 'Too many wrong keys. Try again in 10 minutes.',
+                 4429: "Johnny's on another call."}[e.code];
+    if (S.inCall) { toast(why || 'Call dropped'); endCall(false); }
   };
 }
 function onMessage(data){
@@ -516,14 +518,19 @@ if (debug) $('fps').classList.remove('hidden');
 async function keyOk(){
   try {
     const r = await fetch('/johnny/check', {headers: {'X-API-Key': S.key}, cache: 'no-store'});
-    if (r.status === 401) return false;
+    if (r.status === 401) return 'wrong';
+    if (r.status === 429) return 'locked';
   } catch {}            // offline or server down: let the call itself say so
-  return true;
+  return 'ok';
 }
 async function boot(){
   show('screen-idle'); $('loading').classList.remove('hidden');
-  if (!(await keyOk())) {
+  const ok = await keyOk();
+  if (ok === 'wrong') {
     storeClear(); show('screen-key'); $('keyError').textContent = 'Wrong key'; return;
+  }
+  if (ok === 'locked') {   // keep the saved key: it may be right, just wait
+    show('screen-key'); $('keyError').textContent = 'Too many wrong keys. Try again in 10 minutes.'; return;
   }
   storeSet(S.key);
   if (!S.renderer) initStage();

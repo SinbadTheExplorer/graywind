@@ -481,3 +481,91 @@ def test_junk_frames_use_rate_limit_slots(monkeypatch):
     with pytest.raises(call.AnswerError) as info:
         asyncio.run(call_route._call_transcribe(_owner(), b"junk"))
     assert "rate limit" in str(info.value)
+
+
+# --- Failed-key lockout ---
+
+def _wrong_hello(client, key="nope"):
+    with client.websocket_connect("/call") as ws:
+        ws.send_json({"type": "hello", "key": key})
+        ws.receive_json()
+        with pytest.raises(WebSocketDisconnect) as info:
+            ws.receive_json()
+    return info.value.code
+
+
+def _guest_key():
+    import keys
+    return keys.add("friend", "guest")
+
+
+def test_ws_hello_failures_count():
+    client = _client()
+    guest = _guest_key()
+    assert [_wrong_hello(client) for _ in range(5)] == [call_route.CLOSE_WRONG_KEY] * 5
+    with client.websocket_connect("/call") as ws:
+        ws.send_json({"type": "hello", "key": guest})
+        assert ws.receive_json() == {"type": "error", "message": auth.LOCKED_OUT}
+        with pytest.raises(WebSocketDisconnect) as info:
+            ws.receive_json()
+    assert info.value.code == call_route.CLOSE_LOCKED
+
+
+def test_locked_identity_rejected_even_with_right_key():
+    client = _client()
+    guest = _guest_key()
+    for _ in range(5):
+        assert client.get("/johnny/check", headers={"X-API-Key": "nope"}).status_code == 401
+    resp = client.get("/johnny/check", headers={"X-API-Key": guest})
+    assert resp.status_code == 429
+    assert resp.json()["detail"] == auth.LOCKED_OUT
+    # still locked for a wrong key too: no hint which keys are right
+    assert client.get("/johnny/check", headers={"X-API-Key": "nope"}).status_code == 429
+
+
+def test_owner_key_gets_through_a_shared_lockout():
+    # A guest behind the same address can't lock the owner out of his server.
+    client = _client()
+    for _ in range(5):
+        client.get("/johnny/check", headers={"X-API-Key": "nope"})
+    assert client.get("/johnny/check", headers={"X-API-Key": "secret123"}).status_code == 200
+    with client.websocket_connect("/call") as ws:
+        ws.send_json({"type": "hello", "key": "secret123"})
+        assert ws.receive_json() == {"type": "state", "state": "speaking"}
+        ws.send_json({"type": "end"})
+
+
+def test_missing_key_does_not_count_toward_lockout():
+    client = _client()
+    for _ in range(10):
+        assert client.get("/johnny/check").status_code == 401
+    assert client.get("/johnny/check", headers={"X-API-Key": "secret123"}).status_code == 200
+
+
+def test_http_and_ws_failures_share_one_count():
+    client = _client()
+    for _ in range(3):
+        client.get("/johnny/check", headers={"X-API-Key": "nope"})
+    _wrong_hello(client)
+    _wrong_hello(client)
+    assert client.get("/johnny/check", headers={"X-API-Key": _guest_key()}).status_code == 429
+
+
+def test_lockout_is_audited_without_the_key(tmp_path):
+    import json
+    client = _client()
+    for _ in range(5):
+        client.get("/johnny/check", headers={"X-API-Key": "guess-xyz"})
+    lines = [json.loads(l) for l in (tmp_path / "audit.log").read_text().splitlines()]
+    events = [l["event"] for l in lines]
+    assert events.count("auth_fail") == 5 and events.count("lockout") == 1
+    assert "guess-xyz" not in (tmp_path / "audit.log").read_text()
+
+
+def test_lockout_alerts_owner(monkeypatch):
+    sent = []
+    monkeypatch.setattr(auth.alerts, "notify", lambda title, msg: sent.append(title))
+    client = _client()
+    for _ in range(5):
+        client.get("/johnny/check", headers={"X-API-Key": "nope"})
+    assert sent == ["Johnny lockout"]

@@ -100,6 +100,7 @@ HELLO_TIMEOUT = 5.0
 CLOSE_NO_HELLO = 4400
 CLOSE_WRONG_KEY = 4401
 CLOSE_BAD_ORIGIN = 4403
+CLOSE_LOCKED = 4423
 CLOSE_BUSY = 4429
 CALL_MAX_CHARS = avatar_brain.MAX_ANSWER_CHARS
 
@@ -256,13 +257,19 @@ async def call_ws(ws: WebSocket):
     except (asyncio.TimeoutError, WebSocketDisconnect, ValueError, KeyError):
         await _refuse(ws, None, CLOSE_NO_HELLO)
         return
+    ident = guards.identity(ws)
     key = hello.get("key") if isinstance(hello, dict) else None
-    rec = auth.lookup(key)
-    if rec is None:
-        if not auth.configured():
-            await _refuse(ws, "no keys configured on the server", 1011)
-        else:
-            await _refuse(ws, "wrong or missing key", CLOSE_WRONG_KEY)
+    rec, reason = auth.authenticate(key, ident)
+    if reason == "locked":
+        await _refuse(ws, auth.LOCKED_OUT, CLOSE_LOCKED)
+        return
+    if reason == "unconfigured":
+        await _refuse(ws, "no keys configured on the server", 1011)
+        return
+    if reason == "wrong":
+        if key:
+            await asyncio.to_thread(auth.note_failure, ident)
+        await _refuse(ws, "wrong or missing key", CLOSE_WRONG_KEY)
         return
     if not guards.SLOTS.acquire(rec.id, owner=rec.scope == "owner"):
         _audit("call_busy", rec.id)

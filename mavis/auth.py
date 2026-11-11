@@ -1,10 +1,14 @@
 import hmac
 import os
+import sys
 
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Request
 
+import alerts
+import guards
 import keys
 import rate_limit
+import usage
 from keys import OWNER_ENV_ID, KeyRecord
 
 # The owner's original key. It stays valid as an owner key (id "owner-env")
@@ -42,10 +46,68 @@ def still_valid(rec: KeyRecord) -> bool:
     return keys.is_active(rec.id)
 
 
-def require_api_key(x_api_key: str = Header(default=None)) -> KeyRecord:
-    rec = lookup(x_api_key)
+LOCKED_OUT = "Too many wrong keys. Try again in 10 minutes."
+
+
+class Refused(Exception):
+    """Why a key was turned away: "locked", "wrong" or "unconfigured"."""
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _audit(event: str, **fields) -> None:
+    try:
+        usage.audit(event, None, **fields)
+    except Exception as exc:  # noqa: BLE001
+        print(f"auth: audit {event} failed: {exc!r}", file=sys.stderr)
+
+
+def note_failure(ident: str) -> None:
+    """Count a wrong key; log it, and alert the owner when it locks someone out.
+
+    Blocking (file writes, and the alert once it is real): async callers
+    run it in a thread.
+    """
+    _audit("auth_fail", ident=ident)
+    if guards.LOCKOUT.fail(ident):
+        _audit("lockout", ident=ident)
+        try:
+            alerts.notify("Johnny lockout", f"{ident} sent too many wrong keys")
+        except Exception as exc:  # noqa: BLE001
+            print(f"auth: alert failed: {exc!r}", file=sys.stderr)
+
+
+def authenticate(candidate, ident: str) -> tuple[KeyRecord | None, str | None]:
+    """The one door every key goes through: (record, None), or (None, reason)
+    where reason is "locked", "wrong" or "unconfigured". The caller must run
+    note_failure(ident) when reason is "wrong" and a key was sent.
+
+    A locked caller is turned away even with a right key -- except the
+    owner's: the keys are far too long to guess, so letting the owner's key
+    through teaches a guesser nothing, and a guest's typos sharing the
+    owner's address can't lock the owner out of his own server.
+    """
+    locked = guards.LOCKOUT.locked(ident)
+    rec = lookup(candidate)
+    if locked and (rec is None or rec.scope != "owner"):
+        return None, "locked"
     if rec is None:
-        if not configured():
-            raise HTTPException(500, "no keys configured on the server")
+        return None, "wrong" if configured() else "unconfigured"
+    return rec, None
+
+
+def require_api_key(x_api_key: str = Header(default=None),
+                    request: Request = None) -> KeyRecord:
+    ident = guards.identity(request)
+    rec, reason = authenticate(x_api_key, ident)
+    if reason == "locked":
+        raise HTTPException(429, LOCKED_OUT)
+    if reason == "unconfigured":
+        raise HTTPException(500, "no keys configured on the server")
+    if reason == "wrong":
+        if x_api_key:    # a missing key guesses nothing; a wrong one counts
+            note_failure(ident)
         raise HTTPException(401, "invalid or missing X-API-Key header")
     return rec
