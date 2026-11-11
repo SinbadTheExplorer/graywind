@@ -569,3 +569,108 @@ def test_lockout_alerts_owner(monkeypatch):
     for _ in range(5):
         client.get("/johnny/check", headers={"X-API-Key": "nope"})
     assert sent == ["Johnny lockout"]
+
+
+# --- Page hardening (CSP) ---
+
+def test_johnny_page_has_csp_and_headers():
+    resp = _client().get("/johnny")
+    csp = resp.headers["content-security-policy"]
+    assert "default-src 'self'" in csp and "frame-ancestors 'none'" in csp
+    assert "'unsafe-inline'" not in csp.split("script-src")[1].split(";")[0]
+    assert "'unsafe-eval'" not in csp
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    assert resp.headers["referrer-policy"] == "no-referrer"
+    assert resp.headers["permissions-policy"] == "microphone=(self), camera=(), geolocation=()"
+
+
+def test_page_has_no_inline_script():
+    import re
+    html = call_route.PAGE.read_text()
+    tags = re.findall(r"<script([^>]*)>", html)
+    inline = [t for t in tags if "src=" not in t and 'type="importmap"' not in t]
+    assert inline == []
+    assert not re.search(r"\son[a-z]+\s*=", html)    # no onclick= style handlers
+
+
+def _browser_importmap_text(html):
+    """The import map's text as a browser's parser sees it (independent of
+    the regex in call_route)."""
+    from html.parser import HTMLParser
+
+    class P(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=False)
+            self.inside, self.text = False, None
+
+        def handle_starttag(self, tag, attrs):
+            self.inside = tag == "script" and dict(attrs).get("type") == "importmap"
+            if self.inside:
+                self.text = ""
+
+        def handle_data(self, data):
+            if self.inside:
+                self.text += data
+
+        def handle_endtag(self, tag):
+            self.inside = False
+
+    p = P()
+    p.feed(html)
+    return p.text
+
+
+def test_importmap_is_allowed_by_exact_hash():
+    import base64, hashlib
+    resp = _client().get("/johnny")
+    block = _browser_importmap_text(resp.text)    # the bytes actually served
+    digest = base64.b64encode(hashlib.sha256(block.encode()).digest()).decode()
+    assert f"'sha256-{digest}'" in resp.headers["content-security-policy"]
+
+
+def test_csp_follows_page_edits_without_restart(tmp_path, monkeypatch):
+    page = tmp_path / "call.html"
+    page.write_text('<script type="importmap">{"imports":{}}</script>')
+    monkeypatch.setattr(call_route, "PAGE", page)
+    first = _client().get("/johnny").headers["content-security-policy"]
+    page.write_text('<script type="importmap">{"imports":{"x":"/y"}}</script>')
+    second = _client().get("/johnny").headers["content-security-policy"]
+    assert first != second
+
+
+def test_broken_page_fails_closed_without_taking_down_the_api(tmp_path, monkeypatch):
+    page = tmp_path / "call.html"
+    page.write_text("<p>no import map</p>")
+    monkeypatch.setattr(call_route, "PAGE", page)
+    csp = _client().get("/johnny").headers["content-security-policy"]
+    assert "sha256-" not in csp and "script-src 'self' 'wasm-unsafe-eval';" in csp
+    assert _client().get("/status").status_code == 200
+
+
+def test_csp_names_the_call_websocket():
+    csp = _client().get("/johnny", headers={"host": "johnny.example.ts.net"}).headers[
+        "content-security-policy"]
+    assert "wss://johnny.example.ts.net" in csp
+    evil = _client().get("/johnny", headers={"host": "x; script-src *"}).headers[
+        "content-security-policy"]
+    assert "script-src *" not in evil
+
+
+def test_only_listed_page_scripts_are_served():
+    assert _client().get("/johnny/app.js").status_code == 404
+    assert _client().get("/johnny/..%2Fapp.js").status_code == 404
+
+
+def test_call_js_and_worklet_served():
+    for path in ("/johnny/call.js", "/johnny/worklet.js"):
+        resp = _client().get(path)
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/javascript")
+        assert resp.headers["cache-control"] == "no-cache"
+    assert "registerProcessor('mic'" in _client().get("/johnny/worklet.js").text
+
+
+def test_api_responses_get_basic_headers_but_no_csp():
+    for resp in (_client().get("/status"), _client().get("/johnny/check")):
+        assert resp.headers["x-content-type-options"] == "nosniff"
+        assert "content-security-policy" not in resp.headers

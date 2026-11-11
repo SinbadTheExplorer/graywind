@@ -239,6 +239,7 @@ async def ask_stream(req: AskRequest, rec: auth.KeyRecord = Depends(auth.require
 import call_route  # noqa: E402
 
 app.include_router(call_route.router)
+app.add_middleware(call_route.SecurityHeaders)
 
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 

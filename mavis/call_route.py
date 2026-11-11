@@ -8,6 +8,9 @@ Browsers cannot set headers on a WebSocket, so the key arrives as the first
 message rather than in the URL, where it would land in logs and history.
 """
 import asyncio
+import base64
+import hashlib
+import re
 import contextlib
 import functools
 import os
@@ -18,8 +21,8 @@ from urllib.parse import urlsplit
 import threading
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, Response
 
 import auth
 import call
@@ -60,10 +63,100 @@ ALLOWED_ORIGINS = {o.strip().lower() for o in
 PUBLIC_MODEL = os.environ.get("MAVIS_PUBLIC_MODEL")
 
 
+WEB = PAGE.parent
+
+
+_IMPORTMAP = re.compile(r"<script type=\"importmap\">(.*?)</script>", re.S)
+_SAFE_HOST = re.compile(r"[A-Za-z0-9.-]+(:[0-9]{1,5})?")
+
+
+def _importmap_hash(html: str) -> str | None:
+    """CSP hash of the page's one inline block, the import map, or None.
+
+    three.js's add-ons import 'three' by bare name, which only an import map
+    can resolve, and browsers don't load import maps from files. Allowing
+    exactly this block by its hash keeps every other inline script blocked.
+    """
+    blocks = _IMPORTMAP.findall(html)
+    if len(blocks) != 1:
+        return None
+    digest = hashlib.sha256(blocks[0].encode("utf-8")).digest()
+    return "'sha256-" + base64.b64encode(digest).decode() + "'"
+
+
+def page_csp(html: str, host: str | None) -> str:
+    """The call page's CSP, built from the exact bytes being served, so the
+    import map's hash always matches the page the browser gets.
+
+    'wasm-unsafe-eval' lets the model decoder (meshopt) run WebAssembly; it
+    does not allow JavaScript eval (Safari 16+ / iOS 16+). The call's own
+    wss:// address is named outright, because older WebKit doesn't count a
+    WebSocket as 'self'.
+    """
+    importmap = _importmap_hash(html)
+    if importmap is None:    # fail closed: the page breaks, nothing else runs
+        print("call: call.html must have exactly one import map", file=sys.stderr)
+    connect = ["'self'", "blob:"]
+    if host and _SAFE_HOST.fullmatch(host):
+        connect += [f"wss://{host}", f"ws://{host}"]
+    return ("default-src 'self'; "
+            f"script-src 'self' 'wasm-unsafe-eval'{' ' + importmap if importmap else ''}; "
+            f"connect-src {' '.join(connect)}; img-src 'self' data: blob:; "
+            "style-src 'self' 'unsafe-inline'; "
+            "frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'")
+
+
+SECURITY_HEADERS = [
+    (b"x-content-type-options", b"nosniff"),
+    (b"referrer-policy", b"no-referrer"),
+    (b"permissions-policy", b"microphone=(self), camera=(), geolocation=()"),
+    (b"x-frame-options", b"DENY"),
+]
+
+
+class SecurityHeaders:
+    """Plain ASGI middleware: adds the basic headers to every HTTP response
+    without re-streaming the body (so /ask/stream is untouched)."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                names = {k.lower() for k, _ in message.get("headers", [])}
+                message.setdefault("headers", [])
+                message["headers"] = list(message["headers"]) + [
+                    (k, v) for k, v in SECURITY_HEADERS if k not in names]
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
 @router.get("/johnny", include_in_schema=False)
-def call_page():
-    return FileResponse(PAGE, media_type="text/html",
+def call_page(request: Request):
+    html = PAGE.read_text(encoding="utf-8")
+    return Response(html, media_type="text/html", headers={
+        "Cache-Control": "no-cache",
+        "Content-Security-Policy": page_csp(html, request.headers.get("host")),
+    })
+
+
+# The page's own scripts. Only these names are served from web/.
+PAGE_SCRIPTS = {"call.js", "worklet.js"}
+
+
+@router.get("/johnny/{name}.js", include_in_schema=False)
+def call_script(name: str):
+    if f"{name}.js" not in PAGE_SCRIPTS:
+        raise HTTPException(404)
+    return FileResponse(WEB / f"{name}.js", media_type="text/javascript",
                         headers={"Cache-Control": "no-cache"})
+
+
 
 
 @router.get("/johnny/model.glb", include_in_schema=False)

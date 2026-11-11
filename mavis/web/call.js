@@ -1,0 +1,432 @@
+// Johnny's call page. Loaded as a module by call.html (no inline script: CSP).
+import * as THREE from 'three';
+import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
+import {MeshoptDecoder} from 'three/addons/libs/meshopt_decoder.module.js';
+
+// ---------------- tuning (found by rendering) ----------------
+const JAW_BONE = 'mid_J_jaw_JNT';
+const JAW_AXIS = new THREE.Vector3(0, 0, -1);   // mutable for tuning via __johnny.jawAxis
+const JAW_MAX_DEG = 9;
+const LID_BONES = ['l_J_eye_lid_up_root_1_JNT', 'l_J_eye_lid_up_root_2_JNT',
+                   'r_J_eye_lid_up_root_1_JNT', 'r_J_eye_lid_up_root_2_JNT'];
+const LID_AXIS = new THREE.Vector3(0, 0, -1);   // mutable for tuning via __johnny.lidAxis
+const LID_CLOSED_DEG = -22;
+const HEAD_BONE = 'ValveBiped.Bip01_Head1';
+const CAM_FOV = 28;
+const CAM_DISTANCE = 1.15;   // metres in front of the head
+const CAM_HEIGHT = 0.0;
+const LOOK_DOWN = 0.12;
+const LENS_MATCH = /glass/i;
+const LENS_ALPHA_SCALE = 0.3;
+const STATE_CLIP = {listening: 'idle', speaking: 'idle', thinking: 'smoking'};
+
+// ---------------- mic / VAD ----------------
+const RATE = 16000, FRAME = 320;             // 20 ms frames
+const PREROLL_FRAMES = 15, END_FRAMES = 35;  // 300 ms, 700 ms
+const MIN_FRAMES = 15, MAX_FRAMES = 750;     // 300 ms, 15 s
+const START_FRAMES = 3, MIN_THRESHOLD = 0.012;
+
+const $ = id => document.getElementById(id);
+const debug = new URLSearchParams(location.search).has('debug');
+const S = {
+  key: null, state: 'idle', ws: null, inCall: false, muted: false,
+  audioCtx: null, gain: null, analyser: null, queue: [], source: null, decoding: 0, endAfterPlayback: false,
+  mic: null, micNode: null, micSrc: null, wakeLock: null, timer: null, callStart: 0,
+  renderer: null, scene: null, camera: null, mixer: null, actions: {}, current: null,
+  jaw: null, lids: [], head: null, mouth: 0, blinkAt: 0, blinkStart: -1, modelLoaded: false, fps: 0,
+};
+window.__johnny = {S, get state(){return S.state}, get fps(){return S.fps},
+  get modelLoaded(){return S.modelLoaded}, setMouth(v){S.forcedMouth = v}, play: n => fadeTo(n),
+  V: () => V, vad: f => vadFrame(f), jawAxis: JAW_AXIS, lidAxis: LID_AXIS, setBlink(v){S.forcedBlink = v; S.blinkStart = v == null ? -1 : 0}};
+
+// ---------------- small UI helpers ----------------
+function show(id){
+  for (const s of ['screen-key', 'screen-idle', 'screen-call']) $(s).classList.toggle('hidden', s !== id);
+  document.body.classList.toggle('idle', id !== 'screen-call');
+}
+function toast(msg){
+  const el = document.createElement('div'); el.className = 'toast'; el.textContent = msg;
+  $('toasts').appendChild(el); setTimeout(() => el.remove(), 4000);
+}
+let captionTimer = null;
+function caption(text){
+  const c = $('caption'); c.textContent = text; c.classList.add('show');
+  clearTimeout(captionTimer); captionTimer = setTimeout(() => c.classList.remove('show'), 4000);
+}
+function setState(s){ S.state = s; $('stateLabel').textContent = s; }
+function storeGet(){ try { return localStorage.getItem('johnny.key'); } catch { return null; } }
+function storeSet(k){ try { localStorage.setItem('johnny.key', k); } catch {} }
+function storeClear(){ try { localStorage.removeItem('johnny.key'); } catch {} }
+
+// ---------------- 3D ----------------
+function initStage(){
+  const canvas = $('stage');
+  const r = new THREE.WebGLRenderer({canvas, antialias: true});
+  r.setPixelRatio(Math.min(devicePixelRatio, 2));
+  r.outputColorSpace = THREE.SRGBColorSpace;
+  r.toneMapping = THREE.ACESFilmicToneMapping;
+  r.toneMappingExposure = 1.0;
+  S.renderer = r;
+  S.scene = new THREE.Scene();
+  S.scene.background = new THREE.Color(0x07080c);
+  S.camera = new THREE.PerspectiveCamera(CAM_FOV, innerWidth / innerHeight, 0.01, 50);
+  S.scene.add(new THREE.HemisphereLight(0x8899aa, 0x101018, 0.6));
+  const key = new THREE.DirectionalLight(0xfff0e0, 1.6); key.position.set(-1, 1.5, 2); S.scene.add(key);
+  const rimA = new THREE.DirectionalLight(0xff2a6d, 1.0); rimA.position.set(-2, 0.5, -1.5); S.scene.add(rimA);
+  const rimB = new THREE.DirectionalLight(0x05d9e8, 1.0); rimB.position.set(2, 0.5, -1.5); S.scene.add(rimB);
+  addEventListener('resize', frame);
+  frame();
+  requestAnimationFrame(loop);
+}
+
+function loadModel(){
+  return new Promise((resolve, reject) => {
+    const loader = new GLTFLoader();
+    loader.setRequestHeader({'X-API-Key': S.key});
+    loader.setMeshoptDecoder(MeshoptDecoder);
+    loader.load('/johnny/model.glb', gltf => {
+      const root = gltf.scene;
+      root.traverse(o => {
+        if (!o.isMesh) return;
+        o.frustumCulled = false;   // skinned meshes cull on bind-pose bounds
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of mats) {
+          if (LENS_MATCH.test(o.name) || LENS_MATCH.test(m.name || '')) {
+            m.transparent = true; m.opacity *= LENS_ALPHA_SCALE; m.depthWrite = false;
+          }
+        }
+      });
+      S.scene.add(root);
+      S.mixer = new THREE.AnimationMixer(root);
+      for (const clip of gltf.animations) S.actions[clip.name] = S.mixer.clipAction(clip);
+      // GLTFLoader strips characters like "." from node names.
+      const bone = n => root.getObjectByName(THREE.PropertyBinding.sanitizeNodeName(n));
+      S.jaw = bone(JAW_BONE);
+      S.head = bone(HEAD_BONE);
+      S.lids = LID_BONES.map(bone).filter(Boolean);
+      S.mixer.addEventListener('finished', e => {
+        if (e.action === S.actions.dismiss) fadeTo('idle');
+      });
+      fadeTo('idle', 0);
+      S.mixer.update(0);
+      root.updateMatrixWorld(true);
+      S.modelLoaded = true;
+      frame();
+      resolve();
+    }, undefined, err => reject(err));
+  });
+}
+
+function fadeTo(name, secs = 0.4){
+  const next = S.actions[name];
+  if (!next || next === S.current) return;
+  next.reset();
+  if (name === 'dismiss') { next.setLoop(THREE.LoopOnce, 1); next.clampWhenFinished = true; }
+  else next.setLoop(THREE.LoopRepeat, Infinity);
+  next.play();
+  if (S.current && secs > 0) S.current.crossFadeTo(next, secs, false);
+  else if (S.current) S.current.stop();
+  S.current = next;
+}
+
+function frame(){
+  if (!S.renderer) return;
+  const w = innerWidth, h = innerHeight, aspect = w / h;
+  S.renderer.setSize(w, h, false);
+  S.camera.aspect = aspect; S.camera.updateProjectionMatrix();
+  if (!S.head) { S.camera.position.set(0, 1.6, 1.5); S.camera.lookAt(0, 1.5, 0); return; }
+  const head = new THREE.Vector3(); S.head.getWorldPosition(head);
+  const dist = CAM_DISTANCE * Math.max(1, 0.75 / aspect);
+  S.camera.position.set(head.x, head.y + CAM_HEIGHT, head.z + dist);
+  S.camera.lookAt(head.x, head.y - LOOK_DOWN, head.z);
+}
+
+const _q = new THREE.Quaternion();
+let _wave = null;
+let last = performance.now(), fpsAcc = 0, fpsN = 0, lowSince = 0, lowered = false;
+function loop(now){
+  requestAnimationFrame(loop);
+  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  if (S.mixer) S.mixer.update(dt);
+
+  // mouth from what he is actually saying right now
+  let target = 0;
+  if (S.analyser && S.source) {
+    if (!_wave) _wave = new Float32Array(S.analyser.fftSize);
+    S.analyser.getFloatTimeDomainData(_wave);
+    let sum = 0; for (const v of _wave) sum += v * v;
+    target = Math.min(1, Math.sqrt(sum / _wave.length) * 6);
+  }
+  if (S.forcedMouth != null) target = S.forcedMouth;
+  S.mouth += (target - S.mouth) * (target > S.mouth ? 0.5 : 0.15);
+  // Added on top of the clip: the mixer rewrote these bones this frame.
+  if (S.jaw && S.mouth > 0.001) {
+    S.jaw.quaternion.multiply(_q.setFromAxisAngle(JAW_AXIS, THREE.MathUtils.degToRad(JAW_MAX_DEG * S.mouth)));
+  }
+  if (S.lids.length) {
+    const t = now / 1000;
+    if (S.blinkStart < 0 && t >= S.blinkAt) S.blinkStart = t;
+    if (S.blinkStart >= 0) {
+      const p = (t - S.blinkStart) / 0.14;
+      const amount = S.forcedBlink != null ? S.forcedBlink : (p >= 1 ? 0 : Math.sin(Math.PI * p));
+      if (p >= 1) { S.blinkStart = -1; S.blinkAt = t + 2.5 + Math.random() * 3.5; }
+      for (const b of S.lids) b.quaternion.multiply(_q.setFromAxisAngle(LID_AXIS, THREE.MathUtils.degToRad(LID_CLOSED_DEG * amount)));
+    }
+  }
+  if (!S.modelLoaded && !$('orb').classList.contains('hidden')) {
+    $('orb').style.transform = `scale(${1 + S.mouth * 0.35})`;
+  }
+  if (S.renderer && S.modelLoaded) S.renderer.render(S.scene, S.camera);
+
+  fpsAcc += dt; fpsN++;
+  if (fpsAcc >= 0.5) {
+    S.fps = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0;
+    if (debug) $('fps').textContent = `${S.fps.toFixed(0)} fps`;
+    if (S.fps < 20) { lowSince = lowSince || now; if (!lowered && now - lowSince > 3000) { S.renderer.setPixelRatio(1); frame(); lowered = true; } }
+    else lowSince = 0;
+  }
+}
+
+// ---------------- playback ----------------
+function ensureAudio(){
+  if (!S.audioCtx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    S.audioCtx = new AC();
+    S.gain = S.audioCtx.createGain();
+    S.analyser = S.audioCtx.createAnalyser(); S.analyser.fftSize = 512;
+    S.gain.connect(S.analyser); S.analyser.connect(S.audioCtx.destination);
+  }
+  return S.audioCtx.resume();
+}
+function enqueue(arrayBuffer){
+  const callId = S.callId;
+  S.decoding++;
+  S.audioCtx.decodeAudioData(arrayBuffer).then(buf => {
+    if (callId !== S.callId) return;      // a clip from a call already ended
+    S.queue.push(buf);
+    if (!S.source) playNext();
+  }).catch(() => toast("Couldn't play a line of audio"))
+    .finally(() => { if (callId === S.callId) { S.decoding--; maybeFinish(); } });
+}
+function playNext(){
+  const buf = S.queue.shift();
+  if (!buf) { S.source = null; maybeFinish(); return; }
+  const src = S.audioCtx.createBufferSource();
+  src.buffer = buf; src.connect(S.gain);
+  src.onended = () => { if (S.source === src) { S.source = null; playNext(); } };
+  S.source = src; src.start();
+}
+function busy(){ return !!S.source || S.queue.length > 0 || S.decoding > 0; }
+function maybeFinish(){ if (S.endAfterPlayback && !busy()) endCall(false); }
+function stopPlayback(){
+  S.queue = [];
+  const src = S.source; S.source = null;
+  if (src) { try { src.onended = null; src.stop(); src.disconnect(); } catch {} }
+}
+
+// ---------------- mic + voice activity ----------------
+// The mic processor lives in /johnny/worklet.js (no inline code under the CSP).
+
+async function startMic(){
+  S.mic = await navigator.mediaDevices.getUserMedia(
+    {audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true}});
+  S.micSrc = S.audioCtx.createMediaStreamSource(S.mic);
+  const onFrame = f => vadFrame(f);
+  if (S.audioCtx.audioWorklet) {
+    if (!S.workletReady) {   // registerProcessor may run only once per context
+      await S.audioCtx.audioWorklet.addModule('/johnny/worklet.js');
+      S.workletReady = true;
+    }
+    S.micNode = new AudioWorkletNode(S.audioCtx, 'mic', {processorOptions: {rate: RATE, frame: FRAME}});
+    S.micNode.port.onmessage = e => onFrame(e.data);
+  } else {
+    // Old browsers: same decimation on the main thread.
+    const sp = S.audioCtx.createScriptProcessor(2048, 1, 1);
+    const step = S.audioCtx.sampleRate / RATE; let pos = 0, acc = 0, n = 0, out = new Float32Array(FRAME), k = 0;
+    sp.onaudioprocess = e => {
+      const ch = e.inputBuffer.getChannelData(0);
+      for (let i = 0; i < ch.length; i++) {
+        acc += ch[i]; n++; pos += 1;
+        if (pos >= step) { pos -= step; out[k++] = acc / n; acc = 0; n = 0;
+          if (k === FRAME) { onFrame(out.slice()); k = 0; } }
+      }
+    };
+    S.micNode = sp;
+  }
+  // A muted sink keeps the node pulled without sending the mic to the speaker.
+  const sink = S.audioCtx.createGain(); sink.gain.value = 0;
+  S.micSrc.connect(S.micNode); S.micNode.connect(sink); sink.connect(S.audioCtx.destination);
+  S.micSink = sink;
+}
+function stopMic(){
+  if (S.mic) S.mic.getTracks().forEach(t => t.stop());
+  for (const n of [S.micSrc, S.micNode, S.micSink]) { try { n && n.disconnect(); } catch {} }
+  if (S.micNode && S.micNode.port) S.micNode.port.onmessage = null;
+  S.mic = S.micSrc = S.micNode = S.micSink = null;
+  resetVad();
+}
+
+const V = {floor: 0.004, above: 0, below: 0, talking: false, pre: [], frames: []};
+function resetVad(){ V.above = V.below = 0; V.talking = false; V.pre = []; V.frames = []; }
+function canListen(){ return S.inCall && S.state === 'listening' && !S.muted && !busy(); }
+function vadFrame(f){
+  S.micFrames = (S.micFrames || 0) + 1;
+  if (!canListen()) { if (V.talking || V.pre.length) resetVad(); return; }
+  let sum = 0; for (let i = 0; i < f.length; i++) sum += f[i] * f[i];
+  const rms = Math.sqrt(sum / f.length);
+  const threshold = Math.max(MIN_THRESHOLD, V.floor * 3);
+  if (!V.talking) {
+    V.floor += (rms - V.floor) * 0.05;          // learn the room while quiet
+    V.pre.push(f); if (V.pre.length > PREROLL_FRAMES) V.pre.shift();
+    V.above = rms > threshold ? V.above + 1 : 0;
+    if (V.above >= START_FRAMES) { V.talking = true; V.frames = V.pre.slice(); V.pre = []; V.below = 0; }
+    return;
+  }
+  V.frames.push(f);
+  V.below = rms > threshold ? 0 : V.below + 1;
+  if (V.below >= END_FRAMES || V.frames.length >= MAX_FRAMES) {
+    const speech = V.frames.length - V.below;
+    const frames = V.frames; resetVad();
+    if (speech >= MIN_FRAMES) sendUtterance(frames);
+  }
+}
+function wav(frames){
+  const n = frames.length * FRAME, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+  const str = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  str(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); str(8, 'WAVE'); str(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, RATE, true); v.setUint32(28, RATE * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, 'data'); v.setUint32(40, n * 2, true);
+  let o = 44;
+  for (const f of frames) for (let i = 0; i < f.length; i++, o += 2) {
+    const s = Math.max(-1, Math.min(1, f[i])); v.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return buf;
+}
+function sendUtterance(frames){
+  if (!S.ws || S.ws.readyState !== WebSocket.OPEN) return;
+  S.ws.send(wav(frames));
+  setState('thinking'); fadeTo('smoking');
+}
+
+// ---------------- the call ----------------
+async function startCall(){
+  if (S.inCall || S.starting) return;      // a double tap must not start two calls
+  S.starting = true;
+  try {
+    S.callId = (S.callId || 0) + 1;
+    try { await ensureAudio(); } catch (e) { toast(`Audio blocked: ${e.message}`); return; }
+    try { await startMic(); }
+    catch (e) { toast(e.name === 'NotAllowedError' ? 'Microphone permission denied' : `Microphone: ${e.message}`); stopMic(); return; }
+    openCall();
+  } finally { S.starting = false; }
+}
+function openCall(){
+  S.inCall = true; S.endAfterPlayback = false; S.muted = false; updateMute();
+  show('screen-call'); setState('connecting…'); $('timer').textContent = '00:00';
+  if ('wakeLock' in navigator) navigator.wakeLock.request('screen').then(l => S.wakeLock = l).catch(() => {});
+
+  const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/call`);
+  ws.binaryType = 'arraybuffer';
+  S.ws = ws;
+  ws.onopen = () => ws.send(JSON.stringify({type: 'hello', key: S.key}));
+  ws.onmessage = e => { if (S.ws === ws) onMessage(e.data); };
+  ws.onclose = e => {
+    if (S.ws !== ws) return;               // a call we already ended
+    if (e.code === 4401) { storeClear(); endCall(false); show('screen-key'); $('keyError').textContent = 'Wrong key'; return; }
+    if (S.endAfterPlayback) return;        // he said bye; let him finish
+    const why = {1011: 'Server not set up', 4423: 'Too many wrong keys. Try again in 10 minutes.',
+                 4429: "Johnny's on another call."}[e.code];
+    if (S.inCall) { toast(why || 'Call dropped'); endCall(false); }
+  };
+}
+function onMessage(data){
+  if (!S.callStart) {
+    S.callStart = Date.now();
+    S.timer = setInterval(() => {
+      const s = Math.floor((Date.now() - S.callStart) / 1000);
+      $('timer').textContent = `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+    }, 500);
+  }
+  if (typeof data !== 'string') { enqueue(data); return; }
+  let msg; try { msg = JSON.parse(data); } catch { return; }
+  if (msg.type === 'state') { setState(msg.state); fadeTo(STATE_CLIP[msg.state] || 'idle'); }
+  else if (msg.type === 'caption') caption(msg.text);
+  else if (msg.type === 'heard') caption(`“${msg.text}”`);
+  else if (msg.type === 'error') toast(msg.message);
+  else if (msg.type === 'bye') {
+    S.endAfterPlayback = true; maybeFinish();
+    // If playback never drains (screen locked, audio suspended), hang up anyway.
+    const id = S.callId; setTimeout(() => { if (S.inCall && S.callId === id) endCall(false); }, 15000);
+  }
+}
+function endCall(userPressed){
+  if (!S.inCall) return;
+  S.inCall = false; S.callId++;
+  stopPlayback(); S.decoding = 0;
+  const ws = S.ws; S.ws = null;
+  if (ws) {
+    try { if (userPressed && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: 'end'})); } catch {}
+    try { ws.close(); } catch {}
+  }
+  stopMic();
+  clearInterval(S.timer); S.timer = null; S.callStart = 0;
+  if (S.wakeLock) { S.wakeLock.release().catch(() => {}); S.wakeLock = null; }
+  $('caption').classList.remove('show');
+  S.state = 'idle';
+  fadeTo('dismiss');
+  show('screen-idle');
+}
+function updateMute(){
+  $('muteBtn').classList.toggle('on', S.muted);
+  $('muteBtn').setAttribute('aria-pressed', String(S.muted));
+  $('muteBtn').textContent = S.muted ? 'Muted' : 'Mute';
+}
+
+// ---------------- wiring ----------------
+$('callBtn').addEventListener('click', startCall);
+$('endBtn').addEventListener('click', () => endCall(true));
+$('muteBtn').addEventListener('click', () => { S.muted = !S.muted; updateMute(); });
+$('changeKey').addEventListener('click', () => { storeClear(); $('keyInput').value = ''; show('screen-key'); });
+$('saveKey').addEventListener('click', async () => {
+  const k = $('keyInput').value.trim();
+  if (!k) { $('keyError').textContent = 'Enter the key'; return; }
+  S.key = k; $('keyError').textContent = '';
+  await boot();
+});
+$('keyInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('saveKey').click(); });
+if (debug) $('fps').classList.remove('hidden');
+
+async function keyOk(){
+  try {
+    const r = await fetch('/johnny/check', {headers: {'X-API-Key': S.key}, cache: 'no-store'});
+    if (r.status === 401) return 'wrong';
+    if (r.status === 429) return 'locked';
+  } catch {}            // offline or server down: let the call itself say so
+  return 'ok';
+}
+async function boot(){
+  show('screen-idle'); $('loading').classList.remove('hidden');
+  const ok = await keyOk();
+  if (ok === 'wrong') {
+    storeClear(); show('screen-key'); $('keyError').textContent = 'Wrong key'; return;
+  }
+  if (ok === 'locked') {   // keep the saved key: it may be right, just wait
+    show('screen-key'); $('keyError').textContent = 'Too many wrong keys. Try again in 10 minutes.'; return;
+  }
+  storeSet(S.key);
+  if (!S.renderer) initStage();
+  if (!S.modelLoaded) {
+    try {
+      await loadModel();
+      $('orb').classList.add('hidden'); $('stage').classList.remove('hidden');
+    } catch (e) {
+      const status = e && e.response ? `HTTP ${e.response.status}` : String(e && (e.message || e));
+      $('orb').classList.remove('hidden'); $('stage').classList.add('hidden');
+      toast(`Couldn't load Johnny's model: ${status}`);
+    }
+  }
+  $('loading').classList.add('hidden');
+}
+S.key = storeGet();
+if (S.key) boot(); else show('screen-key');
