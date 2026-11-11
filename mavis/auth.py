@@ -67,14 +67,16 @@ def _audit(event: str, **fields) -> None:
 def note_failure(ident: str) -> None:
     """Count a wrong key; log it, and alert the owner when it locks someone out.
 
-    Blocking (file writes, and the alert once it is real): async callers
-    run it in a thread.
+    Blocking (audit file writes; the alert itself returns at once): async
+    callers run it in a thread.
     """
     _audit("auth_fail", ident=ident)
     if guards.LOCKOUT.fail(ident):
         _audit("lockout", ident=ident)
         try:
-            alerts.notify("Johnny lockout", f"{ident} sent too many wrong keys")
+            alerts.notify("Johnny lockout",
+                          "Someone was locked out after too many wrong keys. "
+                          "Details in audit.log.", dedupe=f"lockout:{ident}")
         except Exception as exc:  # noqa: BLE001
             print(f"auth: alert failed: {exc!r}", file=sys.stderr)
 

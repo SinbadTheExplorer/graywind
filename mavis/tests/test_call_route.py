@@ -564,11 +564,13 @@ def test_lockout_is_audited_without_the_key(tmp_path):
 
 def test_lockout_alerts_owner(monkeypatch):
     sent = []
-    monkeypatch.setattr(auth.alerts, "notify", lambda title, msg: sent.append(title))
+    monkeypatch.setattr(auth.alerts, "notify",
+                        lambda title, msg, dedupe: sent.append((title, dedupe)))
     client = _client()
     for _ in range(5):
         client.get("/johnny/check", headers={"X-API-Key": "nope"})
-    assert sent == ["Johnny lockout"]
+    assert [t for t, _ in sent] == ["Johnny lockout"]
+    assert sent[0][1].startswith("lockout:")
 
 
 # --- Page hardening (CSP) ---

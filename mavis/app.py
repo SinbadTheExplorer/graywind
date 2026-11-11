@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from fastapi import HTTPException
 from pydantic import BaseModel, Field, field_validator
 
+import alerts
 import auth
 import grounding
 import guards
@@ -84,7 +85,11 @@ async def _charge_llm(rec) -> None:
     try:
         await asyncio.to_thread(usage.charge, rec, "llm", 1)
     except usage.CapExceeded as exc:
-        await asyncio.to_thread(usage.audit, "cap_hit", rec.id, kind="llm", which=exc.which)
+        alerts.cap_alert("llm", exc.which, rec.id)
+        try:
+            await asyncio.to_thread(usage.audit, "cap_hit", rec.id, kind="llm", which=exc.which)
+        except Exception as audit_exc:  # noqa: BLE001 -- a broken log must not turn 429 into 500
+            _log(f"usage: audit cap_hit failed: {audit_exc!r}")
         raise
     except (sqlite3.Error, OSError) as exc:
         _log(f"usage: charge failed, refusing: {exc!r}")

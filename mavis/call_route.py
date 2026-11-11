@@ -24,6 +24,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 
+import alerts
 import auth
 import call
 import guards
@@ -248,6 +249,7 @@ async def _call_transcribe(rec: auth.KeyRecord, wav: bytes) -> str:
     except usage.CapExceeded as exc:
         await asyncio.to_thread(_audit, "cap_hit", rec.id,
                                 kind="stt_seconds", which=exc.which)
+        alerts.cap_alert("stt_seconds", exc.which, rec.id)
         raise call.AnswerError(guards.TAPPED_OUT) from exc
     except Exception as exc:  # usage store down: refuse, never spend uncounted
         print(f"call: usage charge failed: {exc!r}", file=sys.stderr)

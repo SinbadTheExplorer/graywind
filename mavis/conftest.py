@@ -21,3 +21,9 @@ def _fresh_lockout():
     guards.LOCKOUT.reset()
     yield
     guards.LOCKOUT.reset()
+
+
+@pytest.fixture(autouse=True)
+def _no_real_alerts(monkeypatch):
+    """Tests never post to the owner's ntfy topic."""
+    monkeypatch.delenv("MAVIS_NTFY_TOPIC", raising=False)

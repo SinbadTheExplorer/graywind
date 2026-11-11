@@ -75,6 +75,8 @@ def _connect() -> sqlite3.Connection:
                 conn.execute("CREATE TABLE IF NOT EXISTS usage ("
                              "day TEXT, key_id TEXT, kind TEXT, amount REAL, "
                              "PRIMARY KEY (day, key_id, kind))")
+                conn.execute("CREATE TABLE IF NOT EXISTS alerts ("
+                             "day TEXT, dedupe TEXT, PRIMARY KEY (day, dedupe))")
             _ready.add(path)
     # isolation_level=None: we issue BEGIN IMMEDIATE ourselves.
     return sqlite3.connect(path, timeout=5, isolation_level=None)
@@ -173,6 +175,38 @@ def refund(rec, kind: str, amount: float) -> None:
                      (amount, _today(), rec.id, kind))
     finally:
         conn.close()
+
+
+def alert_sent_today(dedupe: str) -> bool:
+    conn = _connect()
+    try:
+        return conn.execute("SELECT 1 FROM alerts WHERE day=? AND dedupe=?",
+                            (_today(), str(dedupe)[:_MAX_DEDUPE_CHARS])).fetchone() is not None
+    finally:
+        conn.close()
+
+
+def alerts_sent_today() -> int:
+    conn = _connect()
+    try:
+        return conn.execute("SELECT COUNT(*) FROM alerts WHERE day=?", (_today(),)).fetchone()[0]
+    finally:
+        conn.close()
+
+
+def record_alert(dedupe: str) -> None:
+    """Mark an alert sent today; older days' rows are dropped."""
+    day = _today()
+    conn = _connect()
+    try:
+        conn.execute("DELETE FROM alerts WHERE day < ?", (day,))
+        conn.execute("INSERT OR IGNORE INTO alerts (day, dedupe) VALUES (?, ?)",
+                     (day, str(dedupe)[:_MAX_DEDUPE_CHARS]))
+    finally:
+        conn.close()
+
+
+_MAX_DEDUPE_CHARS = 200
 
 
 def today_totals(key_id: str | None = None) -> dict[str, float]:
