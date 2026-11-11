@@ -23,6 +23,9 @@ Environment=MAVIS_MODEL_DIR=/opt/mavis/models
 Environment=MAVIS_CALL_MODEL=/opt/mavis/models/keanu-web.glb
 Environment=MAVIS_CALL_WARM=1
 Environment=MAVIS_TTS=kokoro
+# Owner and linked guests sign in by Tailscale login, no key (auth.py).
+# MAVIS_OWNER_LOGINS (the owner's login) lives in /var/lib/mavis/env.
+Environment=MAVIS_TAILSCALE_SIGNIN=1
 Environment=HOME=/var/lib/mavis
 # 30 s utterance x 32000 B/s + 128 KiB headroom, as mavis-backend.sh derives it.
 # --no-proxy-headers: keep the real peer (127.0.0.1 = tailscale serve), so

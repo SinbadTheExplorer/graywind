@@ -17,6 +17,11 @@ StateDirectory=mavis
 StateDirectoryMode=0700
 UMask=0077
 TimeoutStartSec=300
+# No localhost: the API trusts Tailscale logins from 127.0.0.1, so nothing
+# but tailscale serve may connect there.
+IPAddressDeny=localhost
+# ...except Ubuntu's DNS stub, 127.0.0.53 (the API listens on 127.0.0.1 only).
+IPAddressAllow=127.0.0.53/32
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes

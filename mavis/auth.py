@@ -1,3 +1,4 @@
+import dataclasses
 import hmac
 import os
 import sys
@@ -16,10 +17,49 @@ from keys import OWNER_ENV_ID, KeyRecord
 # wrapper and existing setups keep working unchanged.
 MAVIS_API_KEY = os.environ.get("MAVIS_API_KEY")
 
+# Tailscale logins that are the owner, comma-separated (the server's env).
+# A request relayed by `tailscale serve` carries the caller's login, and
+# serve overwrites any login a caller tries to forge (checked on the VPS
+# 2026-11-11), so these callers need no key at all.
+#
+# Off unless MAVIS_TAILSCALE_SIGNIN=1. Turn it on only where `tailscale
+# serve` is the sole thing that can reach the API's port: any process that
+# can connect to 127.0.0.1:8000 could claim a login. On the VPS the other
+# services are blocked from localhost (IPAddressDeny), and only root can
+# log in; on a laptop full of other programs, leave it off.
+SIGNIN = os.environ.get("MAVIS_TAILSCALE_SIGNIN") == "1"
+OWNER_LOGINS = {keys.login_key(l) for l in
+                os.environ.get("MAVIS_OWNER_LOGINS", "").split(",") if l.strip()}
+
 
 def configured() -> bool:
-    """True if any key can be valid: the env key, or a keys.json record."""
-    return bool(MAVIS_API_KEY) or keys.has_records()
+    """True if anyone can get in: the env key, an owner login, or a keys.json record."""
+    return bool(MAVIS_API_KEY) or (SIGNIN and bool(OWNER_LOGINS)) or keys.has_records()
+
+
+def _owner_record() -> KeyRecord:
+    # The env key keeps honouring MAVIS_RATE_LIMIT_PER_MINUTE, as before.
+    limits = {**keys.DEFAULTS["owner"], "per_minute": rate_limit.MAX_REQUESTS_PER_WINDOW}
+    return KeyRecord(OWNER_ENV_ID, "owner", **limits)
+
+
+def login_of(ident: str) -> str | None:
+    """The Tailscale login in an identity from guards.identity(), if any.
+    identity() only reports one for a request relayed by local serve."""
+    return keys.login_key(ident[3:]) or None if ident.startswith("ts:") else None
+
+
+def lookup_login(login: str | None) -> KeyRecord | None:
+    """Who this Tailscale login is: the owner, a linked guest, or None.
+    Always None unless sign-in by login is switched on (SIGNIN)."""
+    login = keys.login_key(login)
+    if not SIGNIN or not login:
+        return None
+    if login in OWNER_LOGINS:
+        rec = _owner_record()
+    else:
+        rec = keys.lookup_file_login(login)
+    return dataclasses.replace(rec, via_login=login) if rec else None
 
 
 def lookup(candidate) -> KeyRecord | None:
@@ -33,14 +73,15 @@ def lookup(candidate) -> KeyRecord | None:
         candidate.encode("utf-8", "surrogatepass"), MAVIS_API_KEY.encode())
     file_rec = keys.lookup_file(candidate)    # always run: same work either way
     if env_match:
-        # The env key keeps honouring MAVIS_RATE_LIMIT_PER_MINUTE, as before.
-        limits = {**keys.DEFAULTS["owner"], "per_minute": rate_limit.MAX_REQUESTS_PER_WINDOW}
-        return KeyRecord(OWNER_ENV_ID, "owner", **limits)
+        return _owner_record()
     return file_rec
 
 
 def still_valid(rec: KeyRecord) -> bool:
     """Re-checked on every utterance, so a revoke ends an open call."""
+    if rec.via_login:    # got in by login: that login must still map to this key
+        current = lookup_login(rec.via_login)
+        return current is not None and current.id == rec.id
     if rec.id == OWNER_ENV_ID:
         return bool(MAVIS_API_KEY)
     return keys.is_active(rec.id)
@@ -82,7 +123,8 @@ def note_failure(ident: str) -> None:
 
 
 def authenticate(candidate, ident: str) -> tuple[KeyRecord | None, str | None]:
-    """The one door every key goes through: (record, None), or (None, reason)
+    """The one door every caller goes through -- by key, or with no key by
+    Tailscale login: (record, None), or (None, reason)
     where reason is "locked", "wrong" or "unconfigured". The caller must run
     note_failure(ident) when reason is "wrong" and a key was sent.
 
@@ -92,7 +134,9 @@ def authenticate(candidate, ident: str) -> tuple[KeyRecord | None, str | None]:
     owner's address can't lock the owner out of his own server.
     """
     locked = guards.LOCKOUT.locked(ident)
-    rec = lookup(candidate)
+    # No key sent: a recognised Tailscale login is enough. A key, when sent,
+    # always decides, so a wrong key is still counted as one.
+    rec = lookup(candidate) if candidate else lookup_login(login_of(ident))
     if locked and (rec is None or rec.scope != "owner"):
         return None, "locked"
     if rec is None:

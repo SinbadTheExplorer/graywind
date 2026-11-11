@@ -82,7 +82,7 @@ function initStage(){
 function loadModel(){
   return new Promise((resolve, reject) => {
     const loader = new GLTFLoader();
-    loader.setRequestHeader({'X-API-Key': S.key});
+    loader.setRequestHeader(keyHeaders());
     loader.setMeshoptDecoder(MeshoptDecoder);
     loader.load('/johnny/model.glb', gltf => {
       const root = gltf.scene;
@@ -329,7 +329,7 @@ function openCall(){
   const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/call`);
   ws.binaryType = 'arraybuffer';
   S.ws = ws;
-  ws.onopen = () => ws.send(JSON.stringify({type: 'hello', key: S.key}));
+  ws.onopen = () => ws.send(JSON.stringify({type: 'hello', key: S.key || null}));
   ws.onmessage = e => { if (S.ws === ws) onMessage(e.data); };
   ws.onclose = e => {
     if (S.ws !== ws) return;               // a call we already ended
@@ -397,24 +397,33 @@ $('saveKey').addEventListener('click', async () => {
 $('keyInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('saveKey').click(); });
 if (debug) $('fps').classList.remove('hidden');
 
+// No saved key: no header at all, so the server can recognise the caller
+// by their Tailscale login instead (owner and linked guests need no key).
+const keyHeaders = () => (S.key ? {'X-API-Key': S.key} : {});
 async function keyOk(){
   try {
-    const r = await fetch('/johnny/check', {headers: {'X-API-Key': S.key}, cache: 'no-store'});
+    const r = await fetch('/johnny/check', {headers: keyHeaders(), cache: 'no-store'});
     if (r.status === 401) return 'wrong';
     if (r.status === 429) return 'locked';
-  } catch {}            // offline or server down: let the call itself say so
+  } catch { return 'offline'; }
   return 'ok';
 }
 async function boot(){
   show('screen-idle'); $('loading').classList.remove('hidden');
-  const ok = await keyOk();
-  if (ok === 'wrong') {
-    storeClear(); show('screen-key'); $('keyError').textContent = 'Wrong key'; return;
+  let ok = await keyOk();
+  if (ok === 'wrong' && S.key) {   // a stale saved key: Tailscale sign-in may still work
+    storeClear(); S.key = '';
+    ok = await keyOk();
+    if (ok === 'wrong') { show('screen-key'); $('keyError').textContent = 'Wrong key'; return; }
+  }
+  if (ok === 'wrong') { show('screen-key'); $('keyError').textContent = ''; return; }
+  if (ok === 'offline' && !S.key) {
+    show('screen-key'); $('keyError').textContent = "Can't reach Johnny. Is Tailscale on?"; return;
   }
   if (ok === 'locked') {   // keep the saved key: it may be right, just wait
     show('screen-key'); $('keyError').textContent = 'Too many wrong keys. Try again in 10 minutes.'; return;
   }
-  storeSet(S.key);
+  if (S.key) storeSet(S.key);
   if (!S.renderer) initStage();
   if (!S.modelLoaded) {
     try {
@@ -428,5 +437,5 @@ async function boot(){
   }
   $('loading').classList.add('hidden');
 }
-S.key = storeGet();
-if (S.key) boot(); else show('screen-key');
+S.key = storeGet() || '';
+boot();     // with no saved key, boot asks whether Tailscale sign-in is enough

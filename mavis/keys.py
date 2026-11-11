@@ -8,6 +8,8 @@ The env key MAVIS_API_KEY is not in this file: auth.py treats it as the
 owner's key, so the desktop avatar and existing setups keep working.
 
     python keys.py add <id> <owner|guest>    prints the new key once
+    python keys.py link <id> <tailscale-login>   that login needs no key
+    python keys.py unlink <id>
     python keys.py revoke <id>
     python keys.py list
 """
@@ -42,6 +44,9 @@ class KeyRecord:
     per_day_llm: int
     per_day_stt_seconds: int
     revoked: bool = False
+    # Set when the caller got in by Tailscale login (no key): which login,
+    # so still_valid() can end the call if that login is unlinked.
+    via_login: str = ""
 
 
 def store_path() -> Path:
@@ -72,6 +77,7 @@ _warned: set = set()
 def _valid(entry) -> bool:
     try:
         return (isinstance(entry, dict) and isinstance(entry["hash"], str)
+                and (entry.get("login") is None or isinstance(entry["login"], str))
                 and entry["id"] != OWNER_ENV_ID and entry["scope"] in SCOPES
                 and all(isinstance(entry[k], int)
                         for k in ("per_minute", "per_day_llm", "per_day_stt_seconds")))
@@ -176,6 +182,61 @@ def revoke(key_id: str) -> None:
     raise KeyError(key_id)
 
 
+def login_key(login) -> str:
+    """The one way logins are compared everywhere (auth.py too)."""
+    return login.strip().lower() if isinstance(login, str) else ""
+
+
+def _norm_login(login: str) -> str:
+    login = login_key(login)
+    if not login or len(login) > 120 or any(c.isspace() or ord(c) < 32 for c in login):
+        raise ValueError("a Tailscale login looks like name@example.com")
+    return login
+
+
+def link(key_id: str, login: str) -> None:
+    """Let this Tailscale login in as `key_id`, with no key (see auth.py)."""
+    login = _norm_login(login)
+    with _writing():
+        entries = [dict(e) for e in _entries()]
+        if any(e.get("login") == login and e["id"] != key_id and not e.get("revoked")
+               for e in entries):
+            raise ValueError(f"{login} is already linked to another key")
+        for e in entries:
+            if e["id"] == key_id:
+                if e.get("revoked"):
+                    raise ValueError(f"{key_id} is revoked; add a new key and link that")
+                for other in entries:    # a revoked holder gives the login up
+                    if other.get("login") == login and other is not e:
+                        other.pop("login", None)
+                e["login"] = login
+                _write(entries)
+                return
+    raise KeyError(key_id)
+
+
+def unlink(key_id: str) -> None:
+    with _writing():
+        entries = [dict(e) for e in _entries()]
+        for e in entries:
+            if e["id"] == key_id:
+                e.pop("login", None)
+                _write(entries)
+                return
+    raise KeyError(key_id)
+
+
+def lookup_file_login(login) -> KeyRecord | None:
+    """The active record linked to this Tailscale login, or None."""
+    login = login_key(login)
+    if not login:
+        return None
+    for e in _entries():
+        if e.get("login") == login and not e.get("revoked"):
+            return _record(e)
+    return None
+
+
 def is_active(key_id: str) -> bool:
     """True if this file key still exists and is not revoked (a mid-call check)."""
     return any(e["id"] == key_id and not e.get("revoked") for e in _entries())
@@ -207,14 +268,23 @@ def _main(argv: list[str]) -> int:
     if argv[:1] == ["add"] and len(argv) == 3:
         key = add(argv[1], argv[2])
         print(f"New {argv[2]} key for {argv[1]} (shown once, store it now):\n{key}")
+    elif argv[:1] == ["link"] and len(argv) == 3:
+        link(argv[1], argv[2])
+        print(f"{argv[2]} now calls as {argv[1]}, no key needed")
+    elif argv[:1] == ["unlink"] and len(argv) == 2:
+        unlink(argv[1])
+        print(f"unlinked {argv[1]}")
     elif argv[:1] == ["revoke"] and len(argv) == 2:
         revoke(argv[1])
         print(f"revoked {argv[1]}")
     elif argv == ["list"]:
+        logins = {e["id"]: e.get("login") or "" for e in _entries()}
         for r in list_records():
             state = "REVOKED" if r.revoked else "active"
+            login = logins.get(r.id, "")
             print(f"{r.id:20} {r.scope:6} {state:8} {r.per_minute}/min "
-                  f"{r.per_day_llm} answers/day {r.per_day_stt_seconds}s audio/day")
+                  f"{r.per_day_llm} answers/day {r.per_day_stt_seconds}s audio/day"
+                  + (f"  login {login}" if login else ""))
     else:
         print(__doc__, file=sys.stderr)
         return 2

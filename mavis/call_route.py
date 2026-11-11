@@ -400,7 +400,8 @@ async def call_ws(ws: WebSocket):
     started = time.monotonic()
     reason = "failed"
     try:
-        _audit("call_start", rec.id, scope=rec.scope)
+        _audit("call_start", rec.id, scope=rec.scope,
+               ident=f"ts:{rec.via_login}" if rec.via_login else "key")
         # Instant once warmed; otherwise the first call waits for Kokoro here,
         # off the event loop.
         await asyncio.to_thread(_call_voice)
