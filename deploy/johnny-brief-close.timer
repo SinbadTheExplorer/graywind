@@ -1,0 +1,10 @@
+[Unit]
+Description=Johnny's market-close wrap
+
+[Timer]
+OnCalendar=Mon..Fri 15:15 America/Chicago
+Unit=johnny-job@brief-close.service
+
+
+[Install]
+WantedBy=timers.target

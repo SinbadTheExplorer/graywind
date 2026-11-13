@@ -1,0 +1,11 @@
+[Unit]
+Description=Johnny fetches headlines every hour
+
+[Timer]
+OnCalendar=hourly
+Unit=johnny-job@news.service
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

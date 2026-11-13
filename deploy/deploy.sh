@@ -84,9 +84,14 @@ say "Services"
 $SSH 'set -e
       install -m 644 /opt/mavis/deploy/mavis.service /opt/mavis/deploy/mavis-alert@.service \
           /opt/mavis/deploy/graywind-sync.service /opt/mavis/deploy/graywind-sync.timer \
+          /opt/mavis/deploy/johnny-job@.service /opt/mavis/deploy/johnny-news.timer \
+          /opt/mavis/deploy/johnny-watch.timer /opt/mavis/deploy/johnny-brief-close.timer \
+          /opt/mavis/deploy/johnny-brief-night.timer \
           /etc/systemd/system/
       systemctl daemon-reload
       systemctl enable --now graywind-sync.timer >/dev/null
+      systemctl enable --now johnny-news.timer johnny-watch.timer \
+          johnny-brief-close.timer johnny-brief-night.timer >/dev/null
       systemctl start graywind-sync.service || echo "graywind-sync failed; see journalctl -u graywind-sync"
       systemctl enable mavis.service >/dev/null
       systemctl restart mavis.service'

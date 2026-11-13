@@ -1,0 +1,10 @@
+[Unit]
+Description=Johnny's night brief
+
+[Timer]
+OnCalendar=Mon..Fri 21:00 America/Chicago
+Unit=johnny-job@brief-night.service
+
+
+[Install]
+WantedBy=timers.target
