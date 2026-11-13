@@ -109,3 +109,13 @@ def mark(ids: list[str], delivery: str) -> None:
             if ev.get('id') in ids:
                 ev['delivery'] = delivery
         jsonfile.write_atomic(path, data)
+
+
+def undelivered_urgent(now: datetime | None = None, max_age_hours: float = 24) -> list:
+    """Urgent events not yet delivered, oldest first (a failed push is retried)."""
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=max_age_hours)
+    with jsonfile.locked(_events_path()):
+        evs = _load_events(_events_path())["events"]
+    return [ev for ev in evs if ev.get("urgency") == "urgent" and ev.get("delivery") is None
+            and _created(ev) and _created(ev) >= cutoff]
