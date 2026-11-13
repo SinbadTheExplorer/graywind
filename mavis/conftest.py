@@ -27,3 +27,12 @@ def _fresh_lockout():
 def _no_real_alerts(monkeypatch):
     """Tests never post to the owner's ntfy topic."""
     monkeypatch.delenv("MAVIS_NTFY_TOPIC", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_report_files(tmp_path, monkeypatch):
+    """Johnny Reports state (news, events, briefs, pushes) stays in tmp."""
+    for var, name in (("MAVIS_NEWS_FILE", "news.json"), ("MAVIS_EVENTS_FILE", "events.json"),
+                      ("MAVIS_WATCH_FILE", "watch.json"), ("MAVIS_SCHEDULE_FILE", "schedule.json"),
+                      ("MAVIS_PUSH_FILE", "pushes.json"), ("MAVIS_GRAYWIND_REPO", "graywind-state")):
+        monkeypatch.setenv(var, str(tmp_path / name))
