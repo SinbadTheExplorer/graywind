@@ -13,6 +13,7 @@ from typing import Callable, List, Tuple
 
 import httpx
 
+import jsonfile
 import news  # the sibling module that provides `parse_feed` and `SEARCH_FEED`
 
 # --------------------------------------------------------------------------- #
@@ -65,10 +66,8 @@ class NewsError(RuntimeError):
 
 def _normalise_title(title: str) -> str:
     """Lower‑case, collapse whitespace and strip punctuation."""
-    title = title.lower()
-    title = re.sub(r"\s+", " ", title)
-    title = re.sub(r"[^\w\s]", "", title)
-    return title.strip()
+    title = re.sub(r"[^\w\s]", " ", title.lower())
+    return re.sub(r"\s+", " ", title).strip()
 
 
 _WORD_REGEX_CACHE: dict[str, re.Pattern] = {}
@@ -103,8 +102,8 @@ def run(
     seen = set()
     clean_symbols: List[str] = []
     for s in symbols:
-        s_up = s.upper()
-        if s_up not in seen:
+        s_up = (s or "").strip().upper()
+        if s_up and s_up not in seen:
             seen.add(s_up)
             clean_symbols.append(s_up)
         if len(clean_symbols) >= MAX_SYMBOLS:
@@ -191,13 +190,15 @@ def run(
     # ------------------------------------------------------------------- #
     # De‑duplicate by normalised title (keep first encountered)
     # ------------------------------------------------------------------- #
-    seen_titles: set[str] = set()
+    kept: dict[str, dict] = {}
     deduped: List[dict] = []
     for it in filtered:
         norm = _normalise_title(it["title"])
-        if norm in seen_titles:
+        if norm in kept:
+            # The same story from a symbol search still says which symbol.
+            kept[norm].setdefault("__also", set()).add(it.get("__origin_sym"))
             continue
-        seen_titles.add(norm)
+        kept[norm] = it
         deduped.append(it)
 
     # ------------------------------------------------------------------- #
@@ -211,9 +212,9 @@ def run(
             if _word_regex(sym).search(title):
                 symbols_found.append(sym)
 
-        origin_sym = it.get("__origin_sym")
-        if origin_sym and origin_sym not in symbols_found:
-            symbols_found.append(origin_sym)
+        for origin_sym in {it.get("__origin_sym")} | it.pop("__also", set()):
+            if origin_sym and origin_sym not in symbols_found:
+                symbols_found.append(origin_sym)
 
         # Preserve order of `clean_symbols`
         it["symbols"] = [sym for sym in clean_symbols if sym in symbols_found]
@@ -239,31 +240,7 @@ def run(
     # ------------------------------------------------------------------- #
     # Write atomically
     # ------------------------------------------------------------------- #
-    path = news_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    tmp_file = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            delete=False,
-            dir=path.parent,
-            suffix=".tmp",
-            encoding="utf-8",
-        ) as tf:
-            tmp_file = Path(tf.name)
-            json.dump(envelope, tf, ensure_ascii=False, indent=2)
-            tf.flush()
-            os.fsync(tf.fileno())
-        os.replace(tmp_file, path)
-    finally:
-        # If something went wrong, make sure we do not leave stray temp files.
-        if tmp_file and tmp_file.exists():
-            try:
-                tmp_file.unlink()
-            except Exception:  # pragma: no cover
-                pass
-
+    jsonfile.write_atomic(news_path(), envelope, mode=0o644)
     return envelope
 
 

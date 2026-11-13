@@ -209,3 +209,29 @@ def test_load_and_age_minutes(tmp_json_path, base_now, monkeypatch):
 
     # Invalid envelope → inf
     assert nd.age_minutes(None, later) == float("inf")
+
+
+# --- review fixes (2026-11-13) ---------------------------------------------
+def test_story_from_market_feed_keeps_the_symbol_of_its_search_duplicate():
+    from email.utils import format_datetime
+    now = datetime(2026, 11, 13, 20, 0, tzinfo=timezone.utc)
+    pub = format_datetime(now - timedelta(hours=1))
+    rss = ("<rss><channel><item><title>Apple shares slide on China data</title>"
+           f"<pubDate>{pub}</pubDate><link>x</link></item></channel></rss>")
+    env = nd.run(["AAPL"], fetch=lambda url: rss, now=now)
+    assert len(env["items"]) == 1 and env["items"][0]["symbols"] == ["AAPL"]
+
+
+def test_titles_differing_only_in_punctuation_are_one_story():
+    assert nd._normalise_title("Fed holds rates - stocks rally") == \
+        nd._normalise_title("Fed holds rates: stocks rally")
+
+
+def test_blank_symbols_are_dropped():
+    from email.utils import format_datetime
+    now = datetime(2026, 11, 13, 20, 0, tzinfo=timezone.utc)
+    pub = format_datetime(now - timedelta(hours=1))
+    rss = (f"<rss><channel><item><title>Markets drift</title><pubDate>{pub}</pubDate>"
+           "<link>x</link></item></channel></rss>")
+    env = nd.run(["", " ", "spy"], fetch=lambda url: rss, now=now)
+    assert env["symbols"] == ["SPY"]

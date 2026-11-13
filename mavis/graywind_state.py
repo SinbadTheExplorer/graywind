@@ -1,7 +1,7 @@
 # graywind_state.py
 import csv
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from typing import List, Dict, Any, Tuple, Optional
@@ -44,25 +44,31 @@ def _read_csv(path: Path) -> List[Dict[str, str]]:
 
 
 def _read_equity(file_path: Path) -> Tuple[Optional[float], Optional[float], Optional[str]]:
-    rows = _read_csv(file_path)
+    # Only rows with a day and a number count: a half-written last line
+    # must not read as equity (and fake a 99% loss).
+    rows = [r for r in _read_csv(file_path)
+            if r.get("day") and _parse_float(r.get("equity")) is not None]
+    # A last row under half of the one before is a truncated write, not a day.
+    if len(rows) >= 2 and _parse_float(rows[-1]["equity"]) < 0.5 * _parse_float(rows[-2]["equity"]):
+        rows = rows[:-1]
     if not rows:
         return None, None, None
-    # Assume rows are in chronological order (as in the sample)
     last = rows[-1]
-    prev = rows[-2] if len(rows) >= 2 else {}
-    equity = _parse_float(last.get("equity"))
-    prev_equity = _parse_float(prev.get("equity")) if prev else None
-    equity_day = last.get("day") or None
-    return equity, prev_equity, equity_day
+    prev = rows[-2] if len(rows) >= 2 else None
+    equity = _parse_float(last["equity"])
+    prev_equity = _parse_float(prev["equity"]) if prev else None
+    return equity, prev_equity, last["day"]
 
 
 def _read_positions(file_path: Path) -> List[Dict[str, Any]]:
     rows = _read_csv(file_path)
     out = []
     for r in rows:
+        if not (r.get("symbol") or "").strip():
+            continue
         out.append(
             {
-                "symbol": r.get("symbol"),
+                "symbol": r.get("symbol").strip(),
                 "entry": _parse_float(r.get("entry_price")),
                 "shares": _parse_float(r.get("shares")),
                 "stop": _parse_float(r.get("stop")),
@@ -76,9 +82,11 @@ def _read_pending(file_path: Path) -> List[Dict[str, Any]]:
     rows = _read_csv(file_path)
     out = []
     for r in rows:
+        if not (r.get("symbol") or "").strip():
+            continue
         out.append(
             {
-                "symbol": r.get("symbol"),
+                "symbol": r.get("symbol").strip(),
                 "issue": r.get("issue_number"),
                 "side": r.get("side"),
                 "qty": _parse_float(r.get("qty")),
@@ -107,12 +115,15 @@ def _read_decisions(
 
     for r in rows:
         ts_raw = r.get("timestamp")
-        if not ts_raw:
-            continue
+        symbol = (r.get("symbol") or "").strip()
+        if not ts_raw or not symbol:
+            continue    # a truncated row
         try:
             ts = datetime.fromisoformat(ts_raw)
         except Exception:
             continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)    # never the server's (Berlin) local time
         # keep global newest
         if newest_ts is None or ts > newest_ts:
             newest_ts = ts
@@ -123,15 +134,15 @@ def _read_decisions(
         # decisions per today (CT)
         if ts_date == today_ct:
             decisions_today += 1
-            action = r.get("action", "").lower()
+            action = (r.get("action") or "").lower()
             if action == "buy":
-                buys_today.append(r.get("symbol"))
+                buys_today.append(symbol)
             if action == "blocked":
                 blocked_today += 1
 
         # watchlist (last 7 days, inclusive)
         if ts_date >= today_ct - timedelta(days=6):
-            recent_symbols.add(r.get("symbol"))
+            recent_symbols.add(symbol)
 
     return buys_today, blocked_today, decisions_today, recent_symbols, newest_ts
 

@@ -187,3 +187,45 @@ def test_watchlist_last_7_days(repo):
     # watchlist should contain SYM0 .. SYM6 (last 7 days), sorted
     expected = sorted([f"SYM{i}" for i in range(7)])
     assert snap["watchlist"] == expected
+
+
+# --- review fixes (2026-11-13) ---------------------------------------------
+def _repo(tmp_path, files):
+    for rel, text in files.items():
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+    return tmp_path
+
+
+def test_truncated_last_equity_row_is_ignored(tmp_path):
+    repo = _repo(tmp_path, {"state/equity_history.csv":
+                            "day,equity\n2026-11-11,100240.06\n2026-11-12,99584.21\n2026-11-13,99\n"})
+    now = datetime(2026, 11, 13, 15, 15, tzinfo=gs.CT)
+    acct = gs.snapshot(repo, now)["accounts"]["100k"]
+    assert acct["equity"] == 99584.21 and acct["equity_day"] == "2026-11-12"
+
+
+def test_short_decision_row_does_not_drop_the_log(tmp_path):
+    header = "timestamp,symbol,action,reason\n"
+    repo = _repo(tmp_path, {"state/decision_log.csv": header
+                            + "2026-11-13T09:30:00-06:00,AAPL,buy,ok\n"
+                            + "2026-11-13T09:45:00-06:00,AAPL\n"
+                            + "2026-11-13T10:00:00-06:00\n"})
+    now = datetime(2026, 11, 13, 15, 15, tzinfo=gs.CT)
+    snap = gs.snapshot(repo, now)
+    acct = snap["accounts"]["100k"]
+    assert acct["buys_today"] == ["AAPL"] and acct["decisions_today"] == 2
+    assert "decision_log.csv" not in acct["missing"]
+    assert snap["watchlist"] == ["AAPL"]
+
+
+def test_naive_timestamp_is_read_as_utc(tmp_path):
+    header = "timestamp,symbol,action,reason\n"
+    repo = _repo(tmp_path, {"state/decision_log.csv": header
+                            + "2026-11-13T15:00:00-06:00,AAPL,hold,x\n"
+                            + "2026-11-13T22:00:00,SERV,hold,x\n"})
+    now = datetime(2026, 11, 13, 17, 0, tzinfo=gs.CT)
+    snap = gs.snapshot(repo, now)
+    assert snap["accounts"]["100k"]["decisions_today"] == 2   # 22:00 UTC = 16:00 CT
+    assert snap["last_decision"].astimezone(timezone.utc).hour == 22

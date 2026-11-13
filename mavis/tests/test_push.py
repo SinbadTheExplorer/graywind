@@ -215,3 +215,35 @@ def test_old_entries_are_pruned(monkeypatch, tmp_path):
     assert "old" not in final_log
     assert "recent" in final_log
     assert "newone" in final_log
+
+
+# --- review fixes (2026-11-13) ---------------------------------------------
+class _OK:
+    status_code = 200
+
+
+class _Client:
+    def __init__(self):
+        self.posts = 0
+
+    def post(self, **kwargs):
+        self.posts += 1
+        return _OK()
+
+
+def test_malformed_log_entries_are_ignored_not_fatal(monkeypatch, tmp_path):
+    monkeypatch.setenv("MAVIS_NTFY_TOPIC", "testtopic")
+    Path(os.environ["MAVIS_PUSH_FILE"]).write_text(
+        '{"a": "2026-11-13T21:00:00+00:00", "b": {"call": true}, "c": 5}')
+    assert push.calls_today() == 0
+    assert push.send("t", "m", dedupe="new", client=_Client()) is True
+
+
+def test_a_send_that_cannot_be_recorded_still_counts_as_sent(monkeypatch):
+    monkeypatch.setenv("MAVIS_NTFY_TOPIC", "testtopic")
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(push.jsonfile, "write_atomic", boom)
+    assert push.send("t", "m", dedupe="x", client=_Client()) is True

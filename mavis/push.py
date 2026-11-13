@@ -1,8 +1,6 @@
 # push.py
-import json
 import os
 import sys
-import tempfile
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -11,6 +9,7 @@ from typing import Any, Dict, Optional
 import httpx
 
 import alerts
+import jsonfile
 
 # ---------------------------------------------------------------------------
 
@@ -37,62 +36,26 @@ def _log_path() -> Path:
     return Path(env_path)
 
 
-def _load_log() -> Dict[str, Dict[str, Any]]:
-    """
-    Load the JSON log.  If the file cannot be read or is malformed, return an
-    empty dict.
-    """
-    p = _log_path()
+def _sent_utc(entry) -> Optional[datetime]:
+    """The entry's send time in UTC, or None for a malformed entry."""
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
-
-
-def _sent_utc(entry: Dict[str, Any]) -> datetime:
-    sent = datetime.fromisoformat(entry["sent"])
+        sent = datetime.fromisoformat(entry["sent"])
+    except (TypeError, KeyError, ValueError):
+        return None
     return sent.replace(tzinfo=timezone.utc) if sent.tzinfo is None else sent.astimezone(timezone.utc)
 
 
-def _prune_log(log: Dict[str, Dict[str, Any]], now: datetime) -> None:
-    """
-    Remove entries older than 7 days (based on the stored UTC ``sent`` time).
-    The function mutates ``log`` in‑place.
-    """
-    cutoff = now - timedelta(days=7)
-    to_del = [
-        k
-        for k, v in log.items()
-        if _sent_utc(v) < cutoff
-    ]
-    for k in to_del:
-        del log[k]
+def _load_log() -> Dict[str, Dict[str, Any]]:
+    """The dedupe log; malformed entries are dropped, never fatal."""
+    data = jsonfile.read(_log_path(), {})
+    if not isinstance(data, dict):
+        return {}
+    return {k: v for k, v in data.items() if isinstance(v, dict) and _sent_utc(v)}
 
 
 def _save_log(log: Dict[str, Dict[str, Any]], now: datetime) -> None:
-    """
-    Write *log* atomically to the file returned by ``_log_path``.
-    Parent directories are created if necessary.
-    """
-    _prune_log(log, now)
-
-    p = _log_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-
-    # Write to a temporary file in the same directory.
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        encoding="utf-8",
-        delete=False,
-        dir=str(p.parent),
-        prefix=".pushlog.",
-    ) as tf:
-        json.dump(log, tf, ensure_ascii=False, indent=2)
-        temp_name = tf.name
-
-    # Replace atomically.
-    os.replace(temp_name, p)
+    cutoff = now - timedelta(days=7)
+    jsonfile.write_atomic(_log_path(), {k: v for k, v in log.items() if _sent_utc(v) >= cutoff})
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +74,7 @@ def send(
     Send a push notification via ntfy.
 
     Returns ``True`` if the notification was sent, ``False`` if sending is
-    disabled (no topic) or the *dedupe* key was already used today.
+    disabled (no topic) or the *dedupe* key was used in the last 7 days.
 
     Raises ``PushError`` on network/HTTP failures.
     """
@@ -121,6 +84,13 @@ def send(
     if topic is None:
         return False
 
+    # Held through the send: two jobs at once must not both send (or both
+    # miss the other's record).
+    with jsonfile.locked(_log_path()):
+        return _send_locked(title, message, dedupe, call_url, client, now, topic)
+
+
+def _send_locked(title, message, dedupe, call_url, client, now, topic) -> bool:
     log = _load_log()
     if dedupe in log:
         return False
@@ -156,7 +126,12 @@ def send(
 
     # Record the successful push.
     log[dedupe] = {"sent": now.astimezone(timezone.utc).isoformat(), "call": bool(call_url)}
-    _save_log(log, now)
+    try:
+        _save_log(log, now)
+    except OSError as exc:
+        # The phone already got it: raising would make the job retry and
+        # send it again. Say so in the log instead.
+        print(f"push: sent but not recorded ({type(exc).__name__})", file=sys.stderr)
     return True
 
 
