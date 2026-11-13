@@ -9,7 +9,9 @@ from zoneinfo import ZoneInfo
 CT = ZoneInfo('America/Chicago')
 
 DROP_PCT = 1.0                     # percent drop that triggers an urgent alert
-SILENT_MINUTES = 75                # minutes without a decision that triggers an urgent alert
+# Graywind's normal gaps run to 60 min, and the server sees a decision up to
+# 15 min late (commit + graywind-sync), so 90 leaves room for both.
+SILENT_MINUTES = 90                # minutes without a decision that triggers an urgent alert
 # Two missed hourly runs, not one: a single flaky fetch is not worth a call.
 NEWS_STALE_MINUTES = 125
 MARKET_OPEN = time(8, 30)          # regular market open (CT)
@@ -147,12 +149,12 @@ def run(
     # 5.1  Account‑drop check
     if snap and snap.get('ok'):
         for acct, data in snap.get('accounts', {}).items():
-            equity = data.get('equity')
-            prev = data.get('prev_equity')
-            equity_day = data.get('equity_day')
-            if equity is None or not prev or prev <= 0 or equity_day != today_iso:
+            # The dashboard's own day change (from start-of-day equity).
+            change = graywind_state.day_change(data, today_iso)
+            if not change:
                 continue
-            change_pct = (equity - prev) / prev * 100
+            equity, pnl, change_pct = change
+            prev = equity - pnl
             if change_pct <= -DROP_PCT:
                 label = LABELS.get(acct, acct)
                 msg = (

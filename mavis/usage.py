@@ -230,7 +230,7 @@ def today_totals(key_id: str | None = None) -> dict[str, float]:
 # else is dropped, so a careless caller cannot log a transcript or a key.
 AUDIT_FIELDS = frozenset({
     "seconds", "ms", "kind", "amount", "which", "reason", "code",
-    "scope", "ident", "path", "count",
+    "scope", "ident", "path", "count", "opening",
 })
 _MAX_FIELD_CHARS = 120
 _audit_lock = threading.Lock()

@@ -36,6 +36,9 @@ def dummy_snap(
                 "equity": equity,
                 "prev_equity": prev_equity,
                 "equity_day": equity_day,
+                # The dashboard's view of today (start-of-day based).
+                "today": {"equity": equity, "pnl": round(equity - prev_equity, 2), "day": equity_day},
+                "prices": {},
                 "positions": positions or [],
                 "buys_today": buys_today or [],
                 "decisions_today": decisions_total,
@@ -180,12 +183,9 @@ def test_run_sends_with_dedupe_key(monkeypatch):
     fake_snap = dummy_snap(decisions_total=1)
     fake_news = {"items": []}
     # monkeypatch internal helpers
-    monkeypatch.setattr(briefing, "graywind_state", Mock())
     monkeypatch.setattr(briefing, "newsdesk", Mock())
     monkeypatch.setattr(briefing, "push", Mock())
     # make snapshot and news return our fakes
-    briefing.graywind_state.snapshot.return_value = fake_snap
-    briefing.graywind_state.repo_path.return_value = "unused"
     briefing.newsdesk.load.return_value = fake_news
     briefing.push.send = fake_send
 
@@ -248,3 +248,21 @@ def test_zero_previous_equity_is_not_a_crash():
         "equity": 5.0, "prev_equity": 0.0, "equity_day": "2026-11-12", "positions": [],
         "buys_today": [], "decisions_today": 1}}}
     assert "100k account: $5, no update for today." in briefing.facts("close", snap, None, [], now)
+
+
+def test_day_change_matches_the_dashboard_not_yesterdays_row():
+    # 11/13: dashboard today_pnl -97.67 from start-of-day 99,742.32, while
+    # yesterday's equity_history row (99,613.63) would say +$31.
+    snap = dummy_snap(decisions_total=1)
+    snap["accounts"]["100k"].update(equity=99644.65, prev_equity=99613.63, equity_day="2026-11-12",
+                                    today={"equity": 99644.65, "pnl": -97.67, "day": "2026-11-12"})
+    f = briefing.facts("close", snap, None, [], FIXED_NOW)
+    assert "100k account: $99,645, down 0.1% today ($98)." in f
+
+
+def test_holding_shows_the_current_price():
+    snap = dummy_snap(decisions_total=1, positions=[
+        {"symbol": "AAPL", "entry": 348.07, "shares": 1.0, "stop": 343.96, "target": 361.5}])
+    snap["accounts"]["100k"]["prices"] = {"AAPL": 357.585}
+    f = briefing.facts("close", snap, None, [], FIXED_NOW)
+    assert "Holding AAPL, bought at $348.07, now $357.58 (stop $343.96, target $361.50)." in f

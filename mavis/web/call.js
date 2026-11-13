@@ -339,9 +339,7 @@ function openCall(){
   const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/call`);
   ws.binaryType = 'arraybuffer';
   S.ws = ws;
-  const event = incomingEvent;
-  incomingEvent = null;      // answered once; the next call is an ordinary one
-  if (event) history.replaceState(null, '', location.pathname);
+  const event = incomingEvent;   // kept until the server answers (a busy line keeps it)
   ws.onopen = () => ws.send(JSON.stringify({type: 'hello', key: S.key || null, ...(event ? {event} : {})}));
   ws.onmessage = e => { if (S.ws === ws) onMessage(e.data); };
   ws.onclose = e => {
@@ -353,6 +351,13 @@ function openCall(){
     if (S.inCall) { toast(why || 'Call dropped'); endCall(false); }
   };
 }
+function answered(){
+  // Johnny picked up: the next call is an ordinary one. Drop only ?event.
+  if (!incomingEvent) return;
+  incomingEvent = null;
+  params.delete('event');
+  history.replaceState(null, '', location.pathname + (params.toString() ? `?${params}` : ''));
+}
 function onMessage(data){
   let msg = null;
   if (typeof data === 'string') { try { msg = JSON.parse(data); } catch { return; } }
@@ -361,6 +366,7 @@ function onMessage(data){
   if (!S.callStart) {
     S.callStart = Date.now();
     setLive(true);
+    answered();
     S.timer = setInterval(() => {
       const s = Math.floor((Date.now() - S.callStart) / 1000);
       $('timer').textContent = `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;

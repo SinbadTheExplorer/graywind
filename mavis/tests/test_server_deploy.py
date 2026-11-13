@@ -77,7 +77,7 @@ class Blocker(importlib.abc.MetaPathFinder):
         if name.split(".")[0] in BLOCK:
             raise ModuleNotFoundError("not in requirements-server.txt: " + name, name=name)
 sys.meta_path.insert(0, Blocker())
-import app, call_route, alerts, graywind_grounding
+import app, call_route, alerts, graywind_grounding, jobs
 import avatar.tts
 print("ok")
 """

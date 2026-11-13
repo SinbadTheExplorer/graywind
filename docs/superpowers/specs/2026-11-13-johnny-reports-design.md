@@ -106,7 +106,7 @@ more world sources (the parked Bullion Global idea), a prediction scorecard.
     **urgent** ("trade bust"; happened once in 3 weeks, the 10/30 SPY
     stop-out), at most once per account per day;
   - Graywind silent (newest `decision_log.csv` timestamp — every cycle writes
-    a row, even holds — older than 75 min) during market hours
+    a row, even holds — older than 90 min: normal gaps reach 60, plus up to 15 of sync lag) during market hours
     08:30–15:00 CT → **urgent**, at most once a day (fired on 4 real stalls
     in that window; normal gaps are 15–60 min). Silence counts from 08:30
     CT at the earliest, so yesterday's last decision is not "17 h quiet";

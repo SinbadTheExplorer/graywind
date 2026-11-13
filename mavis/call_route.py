@@ -313,7 +313,7 @@ def _call_canned(moment: str) -> bytes | None:
     return _read_line(found[1]) if found else None
 
 
-def _call_deps(rec: auth.KeyRecord, opening: str | None = None) -> call.CallDeps:
+def _call_deps(rec: auth.KeyRecord, alert: str | None = None) -> call.CallDeps:
     from app import _answer_events    # app imports this module
 
     async def transcribe(wav: bytes) -> str:
@@ -326,8 +326,16 @@ def _call_deps(rec: auth.KeyRecord, opening: str | None = None) -> call.CallDeps
             if "delta" in event:
                 yield event["delta"]
 
+    async def answer_opening(question: str):
+        async for event in _answer_events(question, CALL_MAX_CHARS, rec, alert=alert):
+            if "error" in event:
+                raise call.AnswerError(event["error"])
+            if "delta" in event:
+                yield event["delta"]
+
     return call.CallDeps(
-        opening=opening,
+        opening=OPENING_QUESTION if alert else None,
+        answer_opening=answer_opening if alert else None,
         max_seconds=guards.env_number("MAVIS_CALL_MAX_SECONDS", 900, minimum=10),
         idle_seconds=guards.env_number("MAVIS_CALL_IDLE_SECONDS", 120, minimum=10),
         transcribe=transcribe,
@@ -366,11 +374,12 @@ def _origin_ok(ws: WebSocket) -> bool:
 
 
 _EVENT_ID = re.compile(r"[0-9a-f]{12}")
-EVENT_MAX_AGE_SECONDS = 24 * 3600
+EVENT_MAX_AGE_HOURS = 24
+OPENING_QUESTION = "Why did you call?"
 
 
-def _call_opening(rec: auth.KeyRecord, event_id) -> str | None:
-    """What Johnny says first when the owner answers his "calling" push.
+def _call_alert(rec: auth.KeyRecord, event_id) -> str | None:
+    """The alert Johnny rang the owner about, if this call may hear it.
 
     Only the owner hears an event: guests, unknown or malformed ids and
     events older than a day get an ordinary call, and nothing tells them
@@ -379,15 +388,11 @@ def _call_opening(rec: auth.KeyRecord, event_id) -> str | None:
     if rec.scope != "owner" or not isinstance(event_id, str) or not _EVENT_ID.fullmatch(event_id):
         return None
     try:
-        ev = events.get(event_id)
-        created = events._created(ev) if ev else None
+        ev = events.get_recent(event_id, EVENT_MAX_AGE_HOURS)
     except Exception as exc:  # noqa: BLE001 -- a broken log must not stop the call
         print(f"call: event lookup failed: {type(exc).__name__}", file=sys.stderr)
         return None
-    if not created or time.time() - created.timestamp() > EVENT_MAX_AGE_SECONDS:
-        return None
-    return (f"You called the owner about this alert: {ev['text']} "
-            "Explain it in two sentences and ask what he wants to do.")
+    return ev["text"] if ev else None
 
 
 @router.websocket("/call")
@@ -427,13 +432,14 @@ async def call_ws(ws: WebSocket):
     started = time.monotonic()
     reason = "failed"
     try:
+        alert = await asyncio.to_thread(_call_alert, rec, hello.get("event"))
         _audit("call_start", rec.id, scope=rec.scope,
-               ident=f"ts:{rec.via_login}" if rec.via_login else "key")
+               ident=f"ts:{rec.via_login}" if rec.via_login else "key",
+               opening=bool(alert))
         # Instant once warmed; otherwise the first call waits for Kokoro here,
         # off the event loop.
         await asyncio.to_thread(_call_voice)
-        opening = await asyncio.to_thread(_call_opening, rec, hello.get("event"))
-        reason = await call.run_call(ws, _call_deps(rec, opening))
+        reason = await call.run_call(ws, _call_deps(rec, alert))
     finally:
         guards.SLOTS.release(rec.id)
         _audit("call_end", rec.id, reason=reason,

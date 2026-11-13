@@ -92,6 +92,9 @@ $SSH 'set -e
       systemctl enable --now graywind-sync.timer >/dev/null
       systemctl enable --now johnny-news.timer johnny-watch.timer \
           johnny-brief-close.timer johnny-brief-night.timer >/dev/null
+      # Headlines now, not at the next full hour: the watch would call a
+      # missing news file "stale".
+      systemctl start johnny-job@news.service || echo "news job failed; see journalctl -u johnny-job@news"
       systemctl start graywind-sync.service || echo "graywind-sync failed; see journalctl -u graywind-sync"
       systemctl enable mavis.service >/dev/null
       systemctl restart mavis.service'

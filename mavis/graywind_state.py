@@ -14,7 +14,7 @@ ACCOUNTS: List[Tuple[str, str]] = [
     ("small", "state/small"),
 ]
 CT = ZoneInfo("America/Chicago")
-EXPECTED_FILES = ("equity_history.csv", "positions.csv", "pending_trades.csv", "decision_log.csv")
+EXPECTED_FILES = ("equity_history.csv", "positions.csv", "pending_trades.csv", "decision_log.csv", "status.csv")
 
 
 # ----------------------------------------------------------------------
@@ -156,6 +156,54 @@ def repo_path() -> Path:
     return Path(env_path)
 
 
+# The dashboard's own numbers: today's P&L there is measured from Graywind's
+# start-of-day equity, not yesterday's equity_history row (they differ by the
+# overnight move), and the owner checks Johnny against the dashboard.
+DASHBOARD = {"100k": Path("dashboard-data"), "small": Path("dashboard-data") / "small"}
+
+
+def _read_status(file_path: Path) -> Tuple[Optional[dict], Dict[str, float]]:
+    """(today, prices) from a dashboard status.csv.
+
+    today = {'equity', 'pnl', 'day'} from the latest cycle, or None.
+    prices = {symbol: current_price} from that cycle.
+    """
+    rows = [r for r in _read_csv(file_path) if r.get("last_cycle_timestamp")]
+    if not rows:
+        return None, {}
+    latest = max(r["last_cycle_timestamp"] for r in rows)
+    rows = [r for r in rows if r["last_cycle_timestamp"] == latest]
+    try:
+        ts = datetime.fromisoformat(latest)
+    except ValueError:
+        return None, {}
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    equity = _parse_float(rows[0].get("account_equity"))
+    pnl = _parse_float(rows[0].get("today_pnl"))
+    today = None
+    if equity is not None and pnl is not None:
+        today = {"equity": equity, "pnl": pnl, "day": ts.astimezone(CT).date().isoformat()}
+    prices = {}
+    for r in rows:
+        price = _parse_float(r.get("current_price"))
+        if r.get("symbol") and price is not None:
+            prices[r["symbol"].strip()] = price
+    return today, prices
+
+
+def day_change(acct: dict, today_iso: str) -> Optional[Tuple[float, float, float]]:
+    """(equity, pnl, pct) for today exactly as the dashboard shows it, or None."""
+    today = acct.get("today")
+    if not today or today.get("day") != today_iso:
+        return None
+    equity, pnl = today["equity"], today["pnl"]
+    base = equity - pnl
+    if base <= 0:
+        return None
+    return equity, pnl, pnl / base * 100
+
+
 def snapshot(repo: Path, now: datetime) -> dict:
     """Collect a snapshot of the graywind state.
 
@@ -193,6 +241,14 @@ def snapshot(repo: Path, now: datetime) -> dict:
         except Exception:
             equity = prev_equity = equity_day = None
             missing.append("equity_history.csv")
+
+        # ---------- dashboard status (today's P&L, current prices) ----------
+        try:
+            today, prices = _read_status(repo / DASHBOARD[acct_name] / "status.csv")
+        except Exception:
+            today, prices = None, {}
+        if today is None:
+            missing.append("status.csv")
 
         # ---------- positions ----------
         positions_file = acct_dir / "positions.csv"
@@ -241,6 +297,8 @@ def snapshot(repo: Path, now: datetime) -> dict:
             "equity": equity,
             "prev_equity": prev_equity,
             "equity_day": equity_day,
+            "today": today,
+            "prices": prices,
             "positions": positions,
             "buys_today": buys_today,
             "blocked_today": blocked_today,

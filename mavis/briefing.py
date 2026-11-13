@@ -63,21 +63,17 @@ def facts(
         if not acct:
             continue
 
+        # Today's change exactly as Graywind's dashboard shows it.
+        change = graywind_state.day_change(acct, today_iso)
         equity = acct.get("equity")
-        prev = acct.get("prev_equity")
-        equity_day = acct.get("equity_day")
-        if equity is not None and prev and prev > 0 and equity_day == today_iso:
-            change = equity - prev
-            if round(abs(change) / prev * 100, 1) == 0:
-                out.append(
-                    f"{label} account: {fmt_money(equity)}, flat today."
-                )
+        if change:
+            equity, pnl, pct = change
+            if round(abs(pct), 1) == 0:
+                out.append(f"{label} account: {fmt_money(equity)}, flat today.")
             else:
-                pct = abs(change) / prev * 100
-                direction = "up" if change > 0 else "down"
-                out.append(
-                    f"{label} account: {fmt_money(equity)}, {direction} {fmt_pct(pct)} today ({fmt_money(abs(change))})."
-                )
+                direction = "up" if pnl > 0 else "down"
+                out.append(f"{label} account: {fmt_money(equity)}, {direction} {fmt_pct(pct)} "
+                           f"today ({fmt_money(abs(pnl))}).")
         elif equity is not None:
             out.append(f"{label} account: {fmt_money(equity)}, no update for today.")
 
@@ -87,7 +83,7 @@ def facts(
         for pos in acct.get("positions", []):
             sym = pos["symbol"]
             if sym not in merged:
-                merged[sym] = pos
+                merged[sym] = {**pos, "price": (acct.get("prices") or {}).get(sym)}
 
     if merged:
         for sym, pos in merged.items():
@@ -96,7 +92,8 @@ def facts(
             # "bought at", not "from": a model read "AAPL from $348.07" as
             # AAPL trading at $348.07.
             entry = f", bought at {fmt_price(pos['entry'])}" if pos.get("entry") is not None else ""
-            out.append(f"Holding {sym}{entry}" + (f" ({', '.join(levels)})." if levels else "."))
+            now_at = f", now {fmt_price(pos['price'])}" if pos.get("price") is not None else ""
+            out.append(f"Holding {sym}{entry}{now_at}" + (f" ({', '.join(levels)})." if levels else "."))
     else:
         out.append("No open positions.")
 

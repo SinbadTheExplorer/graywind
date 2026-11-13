@@ -14,6 +14,7 @@ THU_10AM = datetime(2026, 11, 12, 10, 0, tzinfo=CT)
 def snap(*, equity=99584.21, prev=100240.06, day="2026-11-12", positions=("AAPL",),
          last_decision=None, missing=(), ok=True):
     acct = {"equity": equity, "prev_equity": prev, "equity_day": day,
+            "today": {"equity": equity, "pnl": round(equity - prev, 2), "day": day}, "prices": {},
             "positions": [{"symbol": s, "entry": 1.0, "shares": 1.0, "stop": None, "target": None}
                           for s in positions],
             "buys_today": [], "blocked_today": 0, "decisions_today": 5, "missing": list(missing)}
@@ -62,10 +63,10 @@ def test_small_drop_is_not_urgent():
 
 
 def test_silent_graywind_only_in_market_hours():
-    two_hours_ago = THU_10AM - timedelta(hours=2)
+    at = THU_10AM + timedelta(minutes=30)      # 2 h after open, decided at 08:00
     run(THU_10AM)
     out = Deliveries()
-    run(THU_10AM, out, snap=snap(last_decision=two_hours_ago))
+    run(at, out, snap=snap(last_decision=THU_10AM - timedelta(hours=2)))
     assert [e["kind"] for e in out] == ["silent"]
 
     after_close = datetime(2026, 11, 12, 16, 0, tzinfo=CT)
@@ -119,8 +120,10 @@ def test_market_open_is_not_silence():
     run(open_ + timedelta(minutes=30), out, snap=snap(last_decision=yesterday))
     assert out == []
     run(open_ + timedelta(minutes=90), out, snap=snap(last_decision=yesterday))
+    assert out == []                          # 90 is still normal
+    run(open_ + timedelta(minutes=105), out, snap=snap(last_decision=yesterday))
     assert [e["kind"] for e in out] == ["silent"]
-    assert "90 minutes" in out[0]["text"]
+    assert "105 minutes" in out[0]["text"]
 
 
 def test_zero_previous_equity_is_not_a_crash():

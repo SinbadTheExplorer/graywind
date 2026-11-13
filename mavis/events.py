@@ -73,6 +73,16 @@ def add(kind: str, urgency: str, text: str, *, key: str, now: datetime | None = 
     return event
 
 
+def get_recent(event_id: str, max_age_hours: float = 24, now: datetime | None = None) -> dict | None:
+    """The event if it exists and is at most `max_age_hours` old."""
+    ev = get(event_id)
+    created = _created(ev) if ev else None
+    now = now or datetime.now(timezone.utc)
+    if not created or now - created > timedelta(hours=max_age_hours):
+        return None
+    return ev
+
+
 def get(event_id: str) -> dict | None:
     """Return the event with the given id, or None."""
     path = _events_path()
