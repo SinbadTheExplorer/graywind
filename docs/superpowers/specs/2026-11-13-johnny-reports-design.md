@@ -98,17 +98,25 @@ more world sources (the parked Bullion Global idea), a prediction scorecard.
   account equity today/yesterday, open positions, today's buys/blocked
   counts, pending proposals, last state update time.
 - `watch.py` — compare the current snapshot with the last one saved
-  (`/var/lib/mavis/watch.json`) and emit events:
-  - position closed (symbol gone from positions) → **urgent** ("trade bust"
-    in the owner's words; the text gives entry/stop/target, never a guessed
-    exit price);
-  - new pending proposal (Graywind wants a decision) → **urgent**;
-  - Graywind state older than 45 min during market hours → **urgent**,
-    at most once a day;
+  (`/var/lib/mavis/watch.json`) and emit events. Grading was checked by
+  replaying 10/26–11/12 history: "every close and every proposal is urgent"
+  gave 1–5 pushes per account per trading day (pestering); the rules below
+  give about one a week, each one a real problem:
+  - an account's equity down ≥ 1 % on the day vs the previous day's close →
+    **urgent** ("trade bust"; happened once in 3 weeks, the 10/30 SPY
+    stop-out), at most once per account per day;
+  - Graywind silent (newest `decision_log.csv` timestamp — every cycle writes
+    a row, even holds — older than 75 min) during market hours
+    08:30–15:00 CT → **urgent**, at most once a day (fired on 4 real stalls
+    in that window; normal gaps are 15–60 min);
   - news file older than 65 min → **urgent**, at most once a day;
-  - a new buy, or a held/watched symbol in the news → **info**.
-  Events are appended to `/var/lib/mavis/events.json` (id, kind, urgency,
-  text, created, delivery). Runs every 15 min after `graywind-sync`.
+  - position closed, new buy, new pending proposal (deduped by
+    `issue_number` across accounts), held/watched symbol in the news →
+    **info**, folded into the next brief.
+  First run (no saved snapshot) only saves a baseline. Events are appended
+  to `/var/lib/mavis/events.json` (id, kind, urgency, text, created,
+  delivery). Runs on its own 15-min timer, not as part of `graywind-sync`
+  (so a failed sync can't stop the staleness checks).
 - `reach.py` — decides delivery for urgent events: busy window or quiet
   hours → text; else call push. At most 3 call pushes a day (then text).
   Text = ntfy default priority; call = ntfy priority 5, tag
@@ -118,8 +126,22 @@ more world sources (the parked Bullion Global idea), a prediction scorecard.
   brief, then asks Groq to say the same thing in Johnny's voice in ≤ 3
   sentences. **Number guard:** every number in the model's version must
   appear in the facts block, and it must be ≤ 3 sentences; otherwise the
-  template is sent. Info events since the last brief are folded in and
-  marked delivered.
+  template is sent. Facts carry numbers already spoken-formatted ("$656",
+  "-0.7%") and the guard ignores commas, so normal rewording passes. Info
+  events since the last brief are folded in and marked delivered. A day
+  with no Graywind decisions (holiday) is reported as a quiet day.
+- **Sending:** a new synchronous ntfy sender (`push.py`) for briefs and
+  events, separate from `alerts.notify()` — that one sends from a daemon
+  thread a oneshot job would kill before the POST, and shares the
+  10-a-day security-alert budget an attacker could exhaust. `push.py`
+  returns only after ntfy accepts (non-zero exit otherwise, so systemd's
+  `OnFailure` pages), with its own dedupe (`brief:<kind>:<CT date>`,
+  event id) and a cap of 3 call pushes a day.
+- **Test isolation:** every new path has an env override (`MAVIS_NEWS_FILE`,
+  `MAVIS_EVENTS_FILE`, `MAVIS_WATCH_FILE`, `MAVIS_SCHEDULE_FILE`) that
+  `conftest.py` points at a temp dir, and conftest blocks `push.py`'s
+  network send like it blocks ntfy today.
+- Per-symbol headlines reuse `news.py`'s Google News search feed.
 - `jobs.py` — CLI the timers call: `news`, `watch`, `brief close|night`,
   `test-event` (injects a fake "position closed" event, optionally at a
   given time, to check criterion 3).
@@ -133,9 +155,16 @@ greeting, answers a synthetic opening ("explain this alert in two sentences
 and ask what he wants to do") through the normal answer pipeline. Guests and
 unknown ids get an ordinary call.
 
-**Systemd (deploy/):** `johnny-news.timer` (hourly), `johnny-watch` run as
-`ExecStartPost` of `graywind-sync.service` (so it sees fresh state),
-`johnny-brief@close.timer` (`Mon..Fri 15:15 America/Chicago`),
+**Order of work (calendar-driven):** today is Fri 11/13; criterion 1 needs
+two consecutive trading days, so briefs must be live by Mon 11/16 15:15 CT.
+Build: news desk → state reader → push sender → briefs → timers → watch +
+text-or-call → incoming-call screen with `hello{event}` last (first cut if
+time runs short; `test-event` can exercise criterion 3 any day). Check
+timers on the VPS with `systemd-analyze calendar` and confirm `deploy.sh`
+installs and enables new units.
+
+**Systemd (deploy/):** `johnny-news.timer` (hourly), `johnny-watch.timer`
+(every 15 min), `johnny-brief@close.timer` (`Mon..Fri 15:15 America/Chicago`),
 `johnny-brief@night.timer` (`Mon..Fri 21:00 America/Chicago`). All
 `User=mavis`, `EnvironmentFile=/var/lib/mavis/env`, `OnFailure=mavis-alert@%n`.
 News job pages the owner after 2 failures in a row (graywind-sync pattern).
