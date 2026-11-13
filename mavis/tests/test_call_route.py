@@ -719,3 +719,36 @@ def test_unlisted_page_files_are_404():
     for name in ("icons/../call.html", "../app.py", "fonts/OFL.txt"):
         with _pytest.raises(_HE):
             call_route._page_file(name)
+
+
+# --- Johnny is calling: only the owner hears the event --------------------
+def _rec(scope):
+    from keys import KeyRecord
+    return KeyRecord(id="k", scope=scope, per_minute=10, per_day_llm=10, per_day_stt_seconds=10)
+
+
+def test_owner_with_valid_event_gets_an_opening():
+    import events
+    ev = events.add("drop", "urgent", "100k account is down 2.0% today.", key="t")
+    opening = call_route._call_opening(_rec("owner"), ev["id"])
+    assert "100k account is down 2.0% today." in opening
+
+
+def test_guest_with_event_gets_ordinary_call():
+    import events
+    ev = events.add("drop", "urgent", "secret", key="t")
+    assert call_route._call_opening(_rec("guest"), ev["id"]) is None
+
+
+def test_unknown_or_stale_event_gets_ordinary_call():
+    import events
+    from datetime import datetime, timedelta, timezone
+    old = events.add("drop", "urgent", "old", key="t",
+                     now=datetime.now(timezone.utc) - timedelta(hours=25))
+    assert call_route._call_opening(_rec("owner"), old["id"]) is None
+    assert call_route._call_opening(_rec("owner"), "0123456789ab") is None
+
+
+def test_bad_event_id_format_is_ignored():
+    for bad in ("../events", "ABCDEF012345", "123", None, 12, {"id": 1}, "0123456789abc"):
+        assert call_route._call_opening(_rec("owner"), bad) is None

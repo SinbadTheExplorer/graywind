@@ -410,3 +410,33 @@ async def test_run_call_reports_why_it_ended():
     ws = FakeWS()
     ws._in.put_nowait({"type": "websocket.receive", "text": '{"type": "end"}'})
     assert await asyncio.wait_for(call.run_call(ws, make_deps()), 2) == "end"
+
+
+# ----------------------------------------------------------------------
+# Johnny placed the call: he speaks first
+# ----------------------------------------------------------------------
+async def test_owner_with_valid_event_hears_opening_first():
+    asked = []
+
+    async def answer(text):
+        asked.append(text)
+        yield "AAPL closed."
+
+    deps = make_deps(answer=answer)
+    deps.opening = "You called the owner about this alert: AAPL closed."
+    ws = FakeWS()
+    task = asyncio.create_task(call.run_call(ws, deps))
+    await wait_for_sent(ws, TURN_DONE)
+    ws._in.put_nowait({"type": "websocket.disconnect"})
+    await asyncio.wait_for(task, 2)
+    assert asked == [deps.opening]
+    assert ws.sent[:3] == GREETING
+    assert ("json", {"type": "caption", "text": "AAPL closed."}) in ws.sent
+    assert ws.sent[-1] == ("json", {"type": "state", "state": "listening"})
+
+
+async def test_no_opening_means_an_ordinary_call():
+    ws = FakeWS()
+    ws._in.put_nowait({"type": "websocket.disconnect"})
+    await asyncio.wait_for(call.run_call(ws, make_deps()), timeout=2)
+    assert messages(ws) == GREETING

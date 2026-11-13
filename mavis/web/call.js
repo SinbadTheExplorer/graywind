@@ -27,7 +27,16 @@ const MIN_FRAMES = 15, MAX_FRAMES = 750;     // 300 ms, 15 s
 const START_FRAMES = 3, MIN_THRESHOLD = 0.012;
 
 const $ = id => document.getElementById(id);
-const debug = new URLSearchParams(location.search).has('debug');
+const params = new URLSearchParams(location.search);
+const debug = params.has('debug');
+// Opened from a "Johnny is calling" push: he has something to tell you.
+// Only the id travels; the server decides whether you may hear it.
+let incomingEvent = /^[0-9a-f]{12}$/.test(params.get('event') || '') ? params.get('event') : null;
+function showIncoming(){
+  $('incoming').classList.toggle('hidden', !incomingEvent);
+  $('callBtn').textContent = incomingEvent ? 'Answer' : 'Call';
+  $('callBtn').setAttribute('aria-label', incomingEvent ? 'Answer Johnny' : 'Call Johnny');
+}
 const S = {
   key: null, state: 'idle', ws: null, inCall: false, muted: false,
   audioCtx: null, gain: null, analyser: null, queue: [], source: null, decoding: 0, endAfterPlayback: false,
@@ -330,7 +339,10 @@ function openCall(){
   const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/call`);
   ws.binaryType = 'arraybuffer';
   S.ws = ws;
-  ws.onopen = () => ws.send(JSON.stringify({type: 'hello', key: S.key || null}));
+  const event = incomingEvent;
+  incomingEvent = null;      // answered once; the next call is an ordinary one
+  if (event) history.replaceState(null, '', location.pathname);
+  ws.onopen = () => ws.send(JSON.stringify({type: 'hello', key: S.key || null, ...(event ? {event} : {})}));
   ws.onmessage = e => { if (S.ws === ws) onMessage(e.data); };
   ws.onclose = e => {
     if (S.ws !== ws) return;               // a call we already ended
@@ -378,6 +390,7 @@ function endCall(userPressed){
   if (S.wakeLock) { S.wakeLock.release().catch(() => {}); S.wakeLock = null; }
   $('caption').classList.remove('show');
   S.state = 'idle';
+  showIncoming();
   setLive(false);
   fadeTo('dismiss');
   show('screen-idle');
@@ -449,4 +462,5 @@ async function boot(){
   $('loading').classList.add('hidden');
 }
 S.key = storeGet() || '';
+showIncoming();
 boot();     // with no saved key, boot asks whether Tailscale sign-in is enough

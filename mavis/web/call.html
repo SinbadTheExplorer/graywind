@@ -66,6 +66,8 @@ body.live #stage,body.live #orb{opacity:1}
 #screen-idle{justify-content:center}
 .card.bare{background:none;border:0;-webkit-backdrop-filter:none;backdrop-filter:none}
 /* Fade out the icon's square backdrop so only the tilted seal shows on black. */
+#incoming{margin:-4px 0 18px;color:var(--cyan);letter-spacing:.08em;animation:blink 1.6s infinite}
+@keyframes blink{50%{opacity:.35}}
 .seal{width:150px;display:block;margin:0 auto 8px;
   -webkit-mask-image:radial-gradient(closest-side,#000 88%,transparent);mask-image:radial-gradient(closest-side,#000 88%,transparent)}
 </style>
@@ -94,6 +96,7 @@ body.live #stage,body.live #orb{opacity:1}
   <div class="card bare">
     <img src="/johnny/icons/icon-512.png" class="seal" alt="">
     <h1 class="title">Johnny</h1>
+    <p id="incoming" class="hidden">is calling…</p>
     <button id="callBtn" class="round call" aria-label="Call Johnny">Call</button>
     <div id="loading">loading Johnny…</div>
     <button id="changeKey" class="link">change key</button>

@@ -56,6 +56,9 @@ class CallDeps:
     idle_seconds: float = 120.0
     clock: Callable[[], float] = time.monotonic
     log: Callable[[str], None] = field(default=_stderr)
+    # When Johnny placed the call (a "Johnny is calling" push), what he says
+    # first, right after the greeting, as if the caller had asked it.
+    opening: str | None = None
 
 
 async def _send_json(ws, obj) -> None:
@@ -165,6 +168,12 @@ async def _turn(wav: bytes, deps: CallDeps, ws) -> bool:
         await _send_json(ws, {"type": "bye"})
         return True
 
+    await _answer_turn(text, deps, ws, t0)
+    return False
+
+
+async def _answer_turn(text: str, deps: CallDeps, ws, t0: float) -> bool:
+    """Answer `text` aloud: produce, deliver, back to listening."""
     queue: asyncio.Queue = asyncio.Queue()
     producer = asyncio.create_task(_produce(text, deps, queue))
     try:
@@ -201,6 +210,13 @@ async def run_call(ws, deps: CallDeps) -> str:
             await _send_bytes(ws, greeting)
         await _send_json(ws, {"type": "state", "state": "listening"})
         deps.log(f"call: greeting sent in {int((deps.clock() - start) * 1000)} ms")
+        if deps.opening:
+            # He called: he speaks first. The loop below treats it as a turn,
+            # so End and the time limits work while he talks.
+            async def opening_turn():
+                await _send_json(ws, {"type": "state", "state": "thinking"})
+                return await _answer_turn(deps.opening, deps, ws, deps.clock())
+            turn = asyncio.create_task(opening_turn())
 
         while True:
             now = deps.clock()
