@@ -1,6 +1,5 @@
 # reach.py
 import os
-import json
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
@@ -87,7 +86,8 @@ def is_quiet(now: datetime, sched: dict | None = None) -> bool:
     return t >= start or t < end
 
 
-def deliver(event: dict, now: datetime | None = None, *, send=None, calls_today=None) -> str:
+def deliver(event: dict, now: datetime | None = None, *, send=None, calls_today=None,
+            decide_at: datetime | None = None) -> str:
     """
     Send the appropriate notification for *event* and record the delivery method.
 
@@ -98,8 +98,11 @@ def deliver(event: dict, now: datetime | None = None, *, send=None, calls_today=
     calls_today = calls_today or push.calls_today
     sched = load_schedule()
     urgent = event.get('urgency') == 'urgent'
-    already_busy = is_busy(now, sched)
-    already_quiet = is_quiet(now, sched)
+    # decide_at: a test event asks "what would happen at 9:00 on Wednesday"
+    # without writing fake times into the real logs.
+    when = decide_at or now
+    already_busy = is_busy(when, sched)
+    already_quiet = is_quiet(when, sched)
 
     # decide whether we can place a call
     if urgent and not already_busy and not already_quiet and calls_today(now) < push.MAX_CALLS_PER_DAY:

@@ -1,6 +1,5 @@
 # watch.py
 import os
-import json
 from datetime import datetime, time, timezone
 from zoneinfo import ZoneInfo
 
@@ -11,7 +10,8 @@ CT = ZoneInfo('America/Chicago')
 
 DROP_PCT = 1.0                     # percent drop that triggers an urgent alert
 SILENT_MINUTES = 75                # minutes without a decision that triggers an urgent alert
-NEWS_STALE_MINUTES = 65            # minutes after which news is considered stale
+# Two missed hourly runs, not one: a single flaky fetch is not worth a call.
+NEWS_STALE_MINUTES = 125
 MARKET_OPEN = time(8, 30)          # regular market open (CT)
 MARKET_CLOSE = time(15, 0)         # regular market close (CT)
 
@@ -23,7 +23,9 @@ MARKET_HOLIDAYS = {
 EARLY_CLOSE = {
     '2026-11-27': time(12, 0),
     '2026-12-24': time(12, 0),
+    '2027-11-26': time(12, 0),
 }
+# NYSE calendar, hand-kept: extend before 2028 (watch.py has no other source).
 LABELS = {'100k': '100k', 'small': 'Small'}
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -33,7 +35,6 @@ import graywind_state          # provides snapshot() and repo_path()
 import newsdesk                # load() and age_minutes()
 import events                  # add()
 import reach                   # deliver()
-import push                    # PushError, calls_today(), MAX_CALLS_PER_DAY
 import jsonfile                # read(), write_atomic(), locked()
 from briefing import fmt_money, fmt_pct
 
@@ -42,6 +43,14 @@ from briefing import fmt_money, fmt_pct
 def watch_path() -> str:
     """Path to the JSON file that stores the last known position snapshot."""
     return os.getenv('MAVIS_WATCH_FILE', '/var/lib/mavis/watch.json')
+
+
+def _as_map(positions) -> dict:
+    """{account: {symbol: entry}}; also reads the older {account: [symbols]}."""
+    out = {}
+    for acct, syms in (positions or {}).items():
+        out[acct] = dict(syms) if isinstance(syms, dict) else {s: None for s in syms or []}
+    return out
 
 
 def market_open_now(now: datetime) -> bool:
@@ -102,7 +111,7 @@ def run(
     # --------------------------------------------------------------------- #
     # 3️⃣  Build the *current* position map from the snapshot (if possible)
     # --------------------------------------------------------------------- #
-    current_positions: dict[str, list[str]] = {}
+    current_positions: dict[str, dict] = {}
     if snap and snap.get('ok'):
         old = (baseline or {}).get('positions', {})
         for acct, data in snap.get('accounts', {}).items():
@@ -110,11 +119,11 @@ def run(
                 # Unreadable is not "everything closed": keep what we knew.
                 current_positions[acct] = old.get(acct, [])
                 continue
-            current_positions[acct] = [
-                pos.get('symbol')
+            current_positions[acct] = {
+                pos.get('symbol'): pos.get('entry')
                 for pos in data.get('positions', [])
-                if isinstance(pos, dict)
-            ]
+                if isinstance(pos, dict) and pos.get('symbol')
+            }
     elif baseline:
         # keep the previous map when we cannot read the state
         current_positions = baseline.get('positions', {})
@@ -141,7 +150,7 @@ def run(
             equity = data.get('equity')
             prev = data.get('prev_equity')
             equity_day = data.get('equity_day')
-            if equity is None or prev is None or equity_day != today_iso:
+            if equity is None or not prev or prev <= 0 or equity_day != today_iso:
                 continue
             change_pct = (equity - prev) / prev * 100
             if change_pct <= -DROP_PCT:
@@ -163,9 +172,13 @@ def run(
     if market_open_now(now):
         if snap and snap.get('ok'):
             last = snap.get('last_decision')
-            minutes = float('inf') if last is None else (now - last).total_seconds() / 60
+            # Silence counts from today's open: at 08:30 yesterday's last
+            # decision is not "17 hours quiet".
+            opened = datetime.combine(ct_now.date(), MARKET_OPEN, tzinfo=CT)
+            since = opened if last is None or last < opened else last
+            minutes = (now - since).total_seconds() / 60
             if minutes > SILENT_MINUTES:
-                when = 'a while' if last is None else f'{int(minutes)} minutes'
+                when = f'{int(minutes)} minutes'
                 msg = (
                     f"Graywind has gone quiet: no decision for {when} "
                     "during market hours."
@@ -199,21 +212,26 @@ def run(
     # --------------------------------------------------------------------- #
     # 6️⃣  Info check – closed positions
     # --------------------------------------------------------------------- #
-    baseline_positions = baseline.get('positions', {})
-    for acct, old_syms in baseline_positions.items():
-        now_syms = current_positions.get(acct, [])
-        for sym in old_syms:
-            if sym not in now_syms:
-                label = LABELS.get(acct, acct)
-                msg = f'{sym} position closed in the {label} account.'
-                ev = events.add(
-                    'closed',
-                    'info',
-                    msg,
-                    key=f'closed:{acct}:{sym}', now=now,
-                )
-                if ev:
-                    new_events.append(ev)
+    # A close counts only when the symbol is still gone on the next run: a
+    # half-synced, header-only positions.csv must not report every position
+    # closed (and use up the day's dedupe for the real close).
+    baseline_positions = _as_map(baseline.get('positions', {}))
+    prev_gone = _as_map(baseline.get('gone', {}))
+    gone: dict[str, dict] = {}
+    for acct in set(baseline_positions) | set(prev_gone):
+        now_syms = current_positions.get(acct, {})
+        missing = {**prev_gone.get(acct, {}), **baseline_positions.get(acct, {})}
+        for sym, entry in missing.items():
+            if sym in now_syms:
+                continue
+            if sym not in prev_gone.get(acct, {}):
+                gone.setdefault(acct, {})[sym] = entry     # first sighting: wait a run
+                continue
+            label = LABELS.get(acct, acct)
+            ev = events.add('closed', 'info', f'{sym} position closed in the {label} account.',
+                            key=f'closed:{acct}:{sym}:{entry}', now=now)
+            if ev:
+                new_events.append(ev)
 
     # --------------------------------------------------------------------- #
     # 7️⃣  Deliver urgent events (ignore info events)
@@ -234,7 +252,7 @@ def run(
     # --------------------------------------------------------------------- #
     jsonfile.write_atomic(
         watch_path(),
-        {'positions': current_positions, 'saved': now.isoformat()},
+        {'positions': current_positions, 'gone': gone, 'saved': now.isoformat()},
     )
 
     # --------------------------------------------------------------------- #

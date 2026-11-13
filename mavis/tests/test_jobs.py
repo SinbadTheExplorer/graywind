@@ -25,22 +25,18 @@ def test_a_failing_job_exits_1(monkeypatch):
     assert jobs.main(["watch"]) == 1
 
 
-def test_news_failure_counter_pages_at_two(monkeypatch):
-    pages = []
+def test_news_fails_the_unit_only_on_the_second_failure_in_a_row(monkeypatch):
     monkeypatch.setattr(jobs, "_symbols", lambda now: [])
 
     def down(symbols, now=None):
         raise jobs.newsdesk.NewsError("all sources failed")
 
     monkeypatch.setattr(jobs.newsdesk, "run", down)
-    monkeypatch.setattr(jobs.push, "send", lambda *a, **k: pages.append(k["dedupe"]) or True)
     now = datetime(2026, 11, 12, 10, 0, tzinfo=CT)
-    for _ in range(3):
-        try:
-            jobs.news_job(now)
-        except jobs.newsdesk.NewsError:
-            pass
-    assert pages == ["newsfail:2026-11-12"]
+    jobs.news_job(now)                     # first: logged, unit succeeds
+    import pytest
+    with pytest.raises(jobs.newsdesk.NewsError):
+        jobs.news_job(now)                 # second: unit fails -> OnFailure page
 
 
 def test_a_good_news_run_resets_the_counter(monkeypatch):
@@ -78,3 +74,19 @@ def test_systemd_instance_name_for_briefs(monkeypatch):
     seen = []
     monkeypatch.setattr(jobs, "brief_job", lambda kind: seen.append(kind) or "ok")
     assert jobs.main(["brief-night"]) == 0 and seen == ["night"]
+
+
+def test_bare_test_event_time_means_chicago(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(jobs.reach, "deliver",
+                        lambda ev, now, decide_at=None: seen.setdefault("at", decide_at) and "text")
+    jobs.test_event(datetime(2026, 11, 11, 9, 0))
+    assert seen["at"].utcoffset().total_seconds() == -6 * 3600
+
+
+def test_brief_takes_at_most_three_info_events(monkeypatch):
+    for i in range(5):
+        jobs.events.add("closed", "info", f"X{i} position closed in the 100k account.", key=f"k{i}")
+    monkeypatch.setattr(jobs.briefing, "run", lambda kind, now=None, info_events=None: "ok")
+    jobs.brief_job("night")
+    assert len(jobs.events.pending_info()) == 2

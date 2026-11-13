@@ -108,11 +108,15 @@ more world sources (the parked Bullion Global idea), a prediction scorecard.
   - Graywind silent (newest `decision_log.csv` timestamp — every cycle writes
     a row, even holds — older than 75 min) during market hours
     08:30–15:00 CT → **urgent**, at most once a day (fired on 4 real stalls
-    in that window; normal gaps are 15–60 min);
-  - news file older than 65 min → **urgent**, at most once a day;
+    in that window; normal gaps are 15–60 min). Silence counts from 08:30
+    CT at the earliest, so yesterday's last decision is not "17 h quiet";
+  - news file older than 125 min (two missed hourly runs; one flaky fetch
+    is not worth a call) → **urgent**, at most once a day;
   - position closed, new buy, new pending proposal (deduped by
     `issue_number` across accounts), held/watched symbol in the news →
     **info**, folded into the next brief.
+  A close is reported only when the symbol is still gone on the next run
+  (a half-synced, header-only positions.csv is not "everything closed").
   First run (no saved snapshot) only saves a baseline. Events are appended
   to `/var/lib/mavis/events.json` (id, kind, urgency, text, created,
   delivery). Runs on its own 15-min timer, not as part of `graywind-sync`
@@ -174,7 +178,7 @@ News job pages the owner after 2 failures in a row (graywind-sync pattern).
 1. On two trading days in a row, both briefs arrive on time (±5 min), each
    ≤ 3 sentences, and every number in them matches the Graywind dashboard.
 2. Over a full day, `news.json`'s `generated_at` is never more than 65 min
-   old; if the cycle breaks, an alert reaches the phone.
+   old; if the cycle breaks (two runs in a row), an alert reaches the phone.
 3. A test "position closed" event during a class window arrives as a text;
    the same event outside one arrives as "Johnny is calling", and answering
    starts a call where Johnny explains the event first.

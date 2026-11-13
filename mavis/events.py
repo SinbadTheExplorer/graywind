@@ -1,13 +1,11 @@
 # events.py
 import os
 import secrets
-import json
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import jsonfile
-import push
 
 CT = ZoneInfo('America/Chicago')
 
@@ -52,11 +50,8 @@ def add(kind: str, urgency: str, text: str, *, key: str, now: datetime | None = 
         # duplicate‑key check (same CT calendar day)
         for ev in data['events']:
             if ev.get('key') == key:
-                try:
-                    created = datetime.fromisoformat(ev['created']).astimezone(CT)
-                except Exception:      # pragma: no cover – malformed entry
-                    continue
-                if created.date() == today:
+                created = _created(ev)
+                if created and created.astimezone(CT).date() == today:
                     return None
 
         event = {

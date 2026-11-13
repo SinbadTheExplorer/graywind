@@ -66,7 +66,7 @@ def facts(
         equity = acct.get("equity")
         prev = acct.get("prev_equity")
         equity_day = acct.get("equity_day")
-        if equity is not None and prev is not None and equity_day == today_iso:
+        if equity is not None and prev and prev > 0 and equity_day == today_iso:
             change = equity - prev
             if round(abs(change) / prev * 100, 1) == 0:
                 out.append(
@@ -125,7 +125,7 @@ def facts(
             out.append("News feed unavailable.")
         else:
             items = news.get("items", [])
-            # First up‑to‑3 headlines that mention a symbol of interest
+            # First up to 2 headlines about a held or watched symbol
             matched_symbols = set()
             for item in items:
                 item_syms = set(item.get("symbols", []))
@@ -138,7 +138,7 @@ def facts(
                     matched_symbols.add(sym)
                     if sum(f.startswith("News on ") for f in out) >= 2:
                         break
-            # Then up to 2 more latest headlines (any symbols)
+            # Then the latest market headline
             extra = 0
             for item in items:
                 if extra >= 1:
@@ -193,19 +193,46 @@ def _extract_numbers(text: str) -> set[str]:
     return nums
 
 
+_DOWN_WORDS = re.compile(r"\b(down|lost|losing|loss|slipp\w*|fell|fall\w*|dropp?\w*|lower|red|bled|sank)\b", re.I)
+_UP_WORDS = re.compile(r"\b(up|gain\w*|rose|ris\w*|climb\w*|higher|green|added)\b", re.I)
+_NOTHING_NEEDS_YOU = re.compile(r"nothing (else )?needs you", re.I)
+
+
+def _sentences(text: str) -> List[str]:
+    return [s for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+
+
 def guard_ok(text: str, facts_list: List[str]) -> bool:
+    """Can this version go out instead of the template?
+
+    Every number must come from the facts, there are at most 3 sentences,
+    a day's move keeps its direction (a loss never reads as a gain), and
+    "nothing needs you" is never said while something is waiting.
+    """
     if not text.strip():
         return False
     if len(_sentence_re.findall(text)) > 3:
         return False
-
-    # numbers in the generated text must appear in the facts
-    text_nums = _extract_numbers(text)
     facts_nums = set()
     for f in facts_list:
         facts_nums.update(_extract_numbers(f))
-
-    return text_nums.issubset(facts_nums)
+    if not _extract_numbers(text).issubset(facts_nums):
+        return False
+    for f in facts_list:
+        m = re.search(r"\b(up|down) (\d[\d.]*%)", f)
+        if not m:
+            continue
+        direction, pct = m.groups()
+        for sentence in _sentences(text):
+            if pct in sentence:
+                wrong = _UP_WORDS if direction == "down" else _DOWN_WORDS
+                right = _DOWN_WORDS if direction == "down" else _UP_WORDS
+                if wrong.search(sentence) and not right.search(sentence):
+                    return False
+    waiting = any(f.startswith("Waiting on you") for f in facts_list)
+    if waiting and _NOTHING_NEEDS_YOU.search(text):
+        return False
+    return True
 
 
 # --------------------------------------------------------------------------- #

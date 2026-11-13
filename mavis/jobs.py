@@ -18,7 +18,6 @@ import events
 import graywind_state
 import jsonfile
 import newsdesk
-import push
 import reach
 import watch
 
@@ -38,32 +37,38 @@ def _symbols(now) -> list:
 
 
 def news_job(now=None) -> None:
+    """Fetch headlines. One failed run is only logged; the second in a row
+    fails the unit, and systemd's OnFailure pages the owner (once a day)."""
     now = now or datetime.now(timezone.utc)
     failures = newsdesk.news_path().with_name("news.failures")
     try:
         newsdesk.run(_symbols(now), now=now)
-    except Exception:
+    except Exception as exc:
         count = int(jsonfile.read(failures, 0) or 0) + 1
         jsonfile.write_atomic(failures, count)
-        if count == NEWS_FAILURES_BEFORE_PAGE:
-            push.send("Johnny", "My news feed failed twice in a row. I'm reading stale headlines.",
-                      dedupe=f"newsfail:{now.astimezone(CT).date().isoformat()}")
-        raise
+        if count >= NEWS_FAILURES_BEFORE_PAGE:
+            raise
+        print(f"jobs: news failed once ({type(exc).__name__}); retrying next hour", file=sys.stderr)
+        return
     if failures.exists():
         failures.unlink()
 
 
 def brief_job(kind: str, now=None) -> str:
-    info = events.pending_info()
+    # Only what the brief can show (facts() takes 3); the rest waits for the next one.
+    info = events.pending_info()[:3]
     text = briefing.run(kind, now=now, info_events=info)
     events.mark([e["id"] for e in info], "brief")
     return text
 
 
 def test_event(at=None, text=TEST_TEXT) -> str:
-    now = at or datetime.now(timezone.utc)
-    ev = events.add("test", "urgent", text, key=f"test:{datetime.now(timezone.utc).isoformat()}", now=now)
-    return reach.deliver(ev, now)
+    """A real push of a fake urgent event, decided as if it were `at`."""
+    now = datetime.now(timezone.utc)
+    if at is not None and at.tzinfo is None:
+        at = at.replace(tzinfo=CT)          # a bare time means Chicago, not the server's Berlin
+    ev = events.add("test", "urgent", text, key=f"test:{now.isoformat()}", now=now)
+    return reach.deliver(ev, now, decide_at=at)
 
 
 def main(argv=None) -> int:

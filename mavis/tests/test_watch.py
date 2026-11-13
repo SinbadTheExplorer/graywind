@@ -85,6 +85,9 @@ def test_stale_news_is_urgent_once_a_day():
     run(THU_10AM)
     out = Deliveries()
     old = {"generated_at": (THU_10AM - timedelta(hours=3)).isoformat(), "items": []}
+    one_missed = {"generated_at": (THU_10AM - timedelta(minutes=90)).isoformat(), "items": []}
+    run(THU_10AM, out, news=one_missed)
+    assert out == []      # one missed hourly run is not worth a call
     run(THU_10AM, out, news=old)
     run(THU_10AM + timedelta(minutes=15), out, news=old)
     assert [e["kind"] for e in out] == ["news_stale"]
@@ -93,10 +96,36 @@ def test_stale_news_is_urgent_once_a_day():
 def test_closed_position_is_info_not_delivered():
     run(THU_10AM)
     out = Deliveries()
-    new = run(THU_10AM + timedelta(minutes=15), out, snap=snap(positions=()))
+    assert run(THU_10AM + timedelta(minutes=15), out, snap=snap(positions=())) == []   # wait a run
+    new = run(THU_10AM + timedelta(minutes=30), out, snap=snap(positions=()))
     assert out == []
     assert [e["text"] for e in new] == ["AAPL position closed in the 100k account."]
     assert [e["kind"] for e in events.pending_info()] == ["closed"]
+    assert run(THU_10AM + timedelta(minutes=45), out, snap=snap(positions=())) == []
+
+
+def test_a_half_synced_positions_file_is_not_a_close():
+    run(THU_10AM)
+    run(THU_10AM + timedelta(minutes=15), snap=snap(positions=()))     # header-only blip
+    assert run(THU_10AM + timedelta(minutes=30)) == []                 # AAPL is back
+    assert events.pending_info() == []
+
+
+def test_market_open_is_not_silence():
+    open_ = datetime(2026, 11, 12, 8, 30, tzinfo=CT)
+    yesterday = datetime(2026, 11, 11, 14, 45, tzinfo=CT)
+    run(open_, snap=snap(last_decision=yesterday))
+    out = Deliveries()
+    run(open_ + timedelta(minutes=30), out, snap=snap(last_decision=yesterday))
+    assert out == []
+    run(open_ + timedelta(minutes=90), out, snap=snap(last_decision=yesterday))
+    assert [e["kind"] for e in out] == ["silent"]
+    assert "90 minutes" in out[0]["text"]
+
+
+def test_zero_previous_equity_is_not_a_crash():
+    run(THU_10AM)
+    assert run(THU_10AM, snap=snap(equity=5.0, prev=0.0)) == []
 
 
 def test_unreadable_positions_file_is_not_a_close():
@@ -130,5 +159,7 @@ def test_delivery_failure_still_saves_baseline():
 
     with pytest.raises(RuntimeError):
         run(THU_10AM, broken, snap=snap(equity=98000.0, prev=100000.0, positions=()))
-    # The close was seen once; the next run doesn't report it again.
-    assert run(THU_10AM + timedelta(minutes=15), snap=snap(positions=())) == []
+    # The first sighting of the close was saved despite the failure: the
+    # next run confirms it, and the one after doesn't repeat it.
+    assert len(run(THU_10AM + timedelta(minutes=15), snap=snap(positions=()))) == 1
+    assert run(THU_10AM + timedelta(minutes=30), snap=snap(positions=())) == []

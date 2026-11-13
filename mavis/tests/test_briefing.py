@@ -228,3 +228,23 @@ def test_pending_proposals_are_merged():
                         {"symbol": "SPY", "issue": "127", "side": "buy"}]}
     f = briefing.facts("close", snap, None, [], now)
     assert "Waiting on you: SPY buy 2 proposals (#126, #127)." in f
+
+
+def test_guard_rejects_a_loss_told_as_a_gain():
+    facts = ["Small account: $9,912, down 0.7% today ($70).", "Nothing needs you."]
+    assert not briefing.guard_ok("Small account's up 0.7% ($70), sitting at $9,912.", facts)
+    assert briefing.guard_ok("Small account slipped 0.7% ($70) to $9,912. Nothing needs you.", facts)
+
+
+def test_guard_rejects_nothing_needs_you_while_something_waits():
+    facts = ["100k account: $99,645, flat today.", "Waiting on you: SPY buy proposal (#126)."]
+    assert not briefing.guard_ok("Flat at $99,645. Nothing needs you, choom.", facts)
+    assert briefing.guard_ok("Flat at $99,645. SPY proposal #126 is waiting on you.", facts)
+
+
+def test_zero_previous_equity_is_not_a_crash():
+    now = datetime(2026, 11, 12, 15, 15, tzinfo=briefing.CT)
+    snap = {"ok": True, "watchlist": [], "pending": [], "accounts": {"100k": {
+        "equity": 5.0, "prev_equity": 0.0, "equity_day": "2026-11-12", "positions": [],
+        "buys_today": [], "decisions_today": 1}}}
+    assert "100k account: $5, no update for today." in briefing.facts("close", snap, None, [], now)

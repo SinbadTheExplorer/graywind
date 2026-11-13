@@ -8,9 +8,16 @@ Type=oneshot
 User=mavis
 # Only the ntfy topic: git and the extractor never see the API keys.
 EnvironmentFile=-/var/lib/mavis/alert.env
+# Once per failed unit per Chicago day: a job that keeps failing every 15
+# minutes must not page the phone every 15 minutes.
 ExecStart=/bin/sh -c 'case "$$MAVIS_NTFY_TOPIC" in ""|*[!A-Za-z0-9_-]*) exit 0;; esac; \
+  stamp="/var/lib/mavis/alerted/%i.$$(TZ=America/Chicago date +%%F)"; \
+  [ -e "$$stamp" ] && exit 0; \
   curl -fsS -m 10 -H "Title: Johnny server problem" -H "Tags: rotating_light" \
-  -d "%i failed on the server. Check: journalctl -u %i" "https://ntfy.sh/$$MAVIS_NTFY_TOPIC" >/dev/null'
+  -d "%i failed on the server. Check: journalctl -u %i" "https://ntfy.sh/$$MAVIS_NTFY_TOPIC" >/dev/null && \
+  { mkdir -p /var/lib/mavis/alerted; touch "$$stamp"; find /var/lib/mavis/alerted -type f -mtime +7 -delete; }'
+StateDirectory=mavis
+StateDirectoryMode=0700
 # No localhost: the API trusts Tailscale logins from 127.0.0.1, so nothing
 # but tailscale serve may connect there.
 IPAddressDeny=localhost
