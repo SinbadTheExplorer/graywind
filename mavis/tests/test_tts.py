@@ -46,6 +46,9 @@ class FlakyVoice(GoodVoice):
 class Fallback:
     name = "say"
 
+    def start(self):
+        pass
+
     def synth(self, text, path):
         open(path, "w").write(f"say:{text}")
 
@@ -148,3 +151,135 @@ def test_elevenlabs_without_credentials_does_not_start(monkeypatch):
     monkeypatch.delenv("ELEVENLABS_VOICE_ID", raising=False)
     with pytest.raises(tts.TTSError, match="ELEVENLABS"):
         tts.ElevenLabsVoice().start()
+
+
+class FailingFallback:
+    name = "bad"
+
+    def start(self):
+        pass
+
+    def synth(self, text, path):
+        raise tts.TTSError("bad fallback")
+
+
+class UnstartableFallback:
+    name = "unstartable"
+
+    def start(self):
+        raise tts.TTSError("cannot start")
+
+    def synth(self, text, path):
+        raise AssertionError("a fallback that never started must not be asked")
+
+
+def test_fallbacks_are_tried_in_order_and_the_first_that_works_speaks(tmp_path):
+    speaker = tts.Speaker(DeadVoice(), [FailingFallback(), Fallback()])
+    speaker.start()
+    assert speaker.synth("Hi.", str(tmp_path / "a.wav")) is False
+    assert (tmp_path / "a.wav").read_text() == "say:Hi."
+
+
+def test_when_every_voice_fails_synth_raises(tmp_path):
+    speaker = tts.Speaker(FlakyVoice(fail_on={"Hi."}), FailingFallback())
+    speaker.start()
+    with pytest.raises(tts.TTSError, match="bad fallback"):
+        speaker.synth("Hi.", str(tmp_path / "a.wav"))
+
+
+def test_with_no_fallback_at_all_a_dead_voice_raises(tmp_path):
+    speaker = tts.Speaker(DeadVoice(), [])
+    speaker.start()
+    with pytest.raises(tts.TTSError, match="no fallback voice available"):
+        speaker.synth("Hi.", str(tmp_path / "a.wav"))
+
+
+def test_a_fallback_that_cannot_start_is_skipped(tmp_path):
+    speaker = tts.Speaker(DeadVoice(), [UnstartableFallback(), Fallback()])
+    speaker.start()
+    assert speaker.synth("Yo.", str(tmp_path / "a.wav")) is False
+    assert (tmp_path / "a.wav").read_text() == "say:Yo."
+
+
+class CountingFallback(Fallback):
+    def __init__(self):
+        self.starts = 0
+
+    def start(self):
+        self.starts += 1
+
+
+def test_a_fallback_is_not_started_while_the_chosen_voice_works(tmp_path):
+    fb = CountingFallback()
+    speaker = tts.Speaker(GoodVoice(), fb)
+    speaker.start()
+    speaker.synth("Hi.", str(tmp_path / "a.wav"))
+    assert fb.starts == 0
+
+
+def test_a_fallback_starts_once_on_first_need(tmp_path):
+    fb = CountingFallback()
+    speaker = tts.Speaker(FlakyVoice(fail_on={"One.", "Two."}), fb)
+    speaker.start()
+    speaker.synth("One.", str(tmp_path / "a.wav"))
+    speaker.synth("Two.", str(tmp_path / "b.wav"))
+    assert fb.starts == 1
+
+
+def test_the_chosen_voices_error_is_kept_when_a_fallback_also_fails(tmp_path):
+    speaker = tts.Speaker(FlakyVoice(fail_on={"Hi."}), [FailingFallback(), Fallback()])
+    speaker.start()
+    assert speaker.synth("Hi.", str(tmp_path / "a.wav")) is False
+    assert speaker.last_error == "dropped the request"
+
+
+def test_a_healthy_voice_reports_no_error_even_if_a_fallback_could_not_start(tmp_path):
+    speaker = tts.Speaker(GoodVoice(), UnstartableFallback())
+    speaker.start()
+    speaker.synth("Hi.", str(tmp_path / "a.wav"))
+    assert speaker.last_error is None and not speaker.degraded
+
+
+def test_a_failed_restart_is_not_ready():
+    voice = GoodVoice()
+    speaker = tts.Speaker(voice, Fallback())
+    speaker.start()
+    voice.start = DeadVoice().start
+    speaker.start()
+    assert not speaker.ready and speaker.degraded
+
+
+def test_a_tuple_of_fallbacks_is_a_list_of_voices():
+    speaker = tts.Speaker(GoodVoice(), (Fallback(), Fallback()))
+    assert len(speaker.fallbacks) == 2
+
+
+def test_say_will_not_start_off_a_mac(monkeypatch):
+    monkeypatch.setattr(tts.sys, "platform", "linux")
+    with pytest.raises(tts.TTSError, match="only on a Mac"):
+        tts.SayVoice().start()
+
+
+def test_a_cloud_voice_falls_back_to_kokoro_then_say():
+    fallbacks = tts.default_fallbacks("elevenlabs")
+    assert [type(f) for f in fallbacks] == [tts.KokoroVoice, tts.SayVoice]
+
+
+def test_kokoro_and_say_fall_back_only_to_say():
+    assert [type(f) for f in tts.default_fallbacks("kokoro")] == [tts.SayVoice]
+    assert [type(f) for f in tts.default_fallbacks("say")] == [tts.SayVoice]
+
+
+def test_on_linux_a_cloud_voice_that_fails_is_spoken_by_kokoro(monkeypatch, tmp_path):
+    monkeypatch.setattr(tts.sys, "platform", "linux")
+
+    class FakeKokoro(Fallback):
+        name = "kokoro"
+
+        def synth(self, text, path):
+            open(path, "w").write(f"kokoro:{text}")
+
+    speaker = tts.Speaker(DeadVoice(), [FakeKokoro(), tts.SayVoice()])
+    speaker.start()
+    assert speaker.synth("Hi.", str(tmp_path / "a.wav")) is False
+    assert (tmp_path / "a.wav").read_text() == "kokoro:Hi."

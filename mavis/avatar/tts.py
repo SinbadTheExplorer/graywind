@@ -9,13 +9,17 @@ Which voice is `MAVIS_TTS`:
     kokoro      local, free, the default. ~0.4x realtime on CPU (measured
                 2026-10-01: 81 chars -> 4.9s of audio in 1.2s).
     elevenlabs  cloud. Needs ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID.
-    say         macOS `say`. Also what every other voice falls back to.
+    say         macOS `say`. Mac only.
 
-Every failure degrades to `say` rather than silence, and `Speaker.degraded`
-/ `last_error` let the UI show it -- the same rule the old voice path kept.
+A failing voice degrades rather than going silent: a cloud voice falls back
+to Kokoro, and on a Mac anything falls back to `say` last. The server is
+Linux, where `say` does not exist. `Speaker.degraded` / `last_error` let the
+UI show it -- the same rule the old voice path kept.
 """
 import os
+import shutil
 import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -74,7 +78,8 @@ class SayVoice:
     name = "say"
 
     def start(self) -> None:
-        pass
+        if sys.platform != "darwin" or not shutil.which("say"):
+            raise TTSError("`say` exists only on a Mac")
 
     def synth(self, text: str, path: str) -> None:
         try:
@@ -222,18 +227,45 @@ class ElevenLabsVoice:
 VOICES = {"kokoro": KokoroVoice, "elevenlabs": ElevenLabsVoice, "say": SayVoice}
 
 
+def default_fallbacks(primary_name: str) -> list:
+    """The voices behind `primary_name`, in the order they are tried.
+
+    Kokoro is local and free, so it backs a cloud voice. `say` is last; off
+    a Mac it refuses to start and is skipped.
+    """
+    fallbacks = []
+    if primary_name not in ("kokoro", "say"):
+        fallbacks.append(KokoroVoice())     # cheap to build; loads on first use
+    fallbacks.append(SayVoice())
+    return fallbacks
+
+
 class Speaker:
-    """The chosen voice, with `say` behind it.
+    """The chosen voice, with fallback voices behind it.
 
     A voice that fails to start, or fails on a sentence, hands that sentence
-    to `say` and marks the speaker degraded. A failed sentence is not retried
-    in the chosen voice, but the next one is: a cloud voice drops a request
-    now and then, and one drop should not cost the rest of the session.
+    to the first fallback that can speak it and marks the speaker degraded.
+    A failed sentence is not retried in the chosen voice, but the next one
+    is: a cloud voice drops a request now and then, and one drop should not
+    cost the rest of the session. Only when every voice fails does `synth`
+    raise; the call skips that sentence.
+
+    Fallbacks start the first time they are needed, not in `start()`:
+    loading Kokoro takes seconds and real memory, wasted while a cloud voice
+    is healthy. `last_error` is always the chosen voice's error.
     """
 
     def __init__(self, voice=None, fallback=None):
         self.voice = voice if voice is not None else make_voice()
-        self.fallback = fallback if fallback is not None else SayVoice()
+        # None -> the defaults; one voice or a list/tuple of them otherwise.
+        if fallback is None:
+            self.fallbacks = default_fallbacks(self.voice.name)
+        elif isinstance(fallback, (list, tuple)):
+            self.fallbacks = list(fallback)
+        else:
+            self.fallbacks = [fallback]
+        self._started = {}              # fallback index -> True / False (won't start)
+        self._start_lock = threading.Lock()
         self.ready = False
         self.degraded = False
         self.last_error = None
@@ -243,6 +275,9 @@ class Speaker:
         return self.voice.name
 
     def start(self) -> None:
+        """Start the chosen voice. Fallbacks wait until they are needed."""
+        self.ready = False
+        self._started = {}
         try:
             self.voice.start()
         except TTSError as exc:
@@ -250,8 +285,19 @@ class Speaker:
             return
         self.ready = True
 
+    def _fallback_ready(self, i: int) -> bool:
+        with self._start_lock:         # two calls may need it at once
+            if i not in self._started:
+                try:
+                    self.fallbacks[i].start()
+                    self._started[i] = True
+                except TTSError:
+                    self._started[i] = False
+            return self._started[i]
+
     def synth(self, text: str, path: str) -> bool:
-        """Write `text` as a wav at `path`. True if in the chosen voice."""
+        """Write `text` as a wav at `path`. True if in the chosen voice,
+        False if a fallback spoke it. Raises TTSError if no voice could."""
         if self.ready:
             try:
                 self.voice.synth(text, path)
@@ -259,12 +305,22 @@ class Speaker:
                 return True
             except TTSError as exc:
                 self.degraded, self.last_error = True, str(exc)
-        self.fallback.synth(text, path)
-        return False
+        fallback_errors = []
+        for i, fb in enumerate(self.fallbacks):
+            if not self._fallback_ready(i):
+                continue
+            try:
+                fb.synth(text, path)
+                return False
+            except TTSError as exc:
+                fallback_errors.append(f"{fb.name}: {exc}")
+        detail = "; ".join(fallback_errors) or "no fallback voice available"
+        raise TTSError(f"no voice could speak ({self.last_error}; {detail})")
 
 
 class UnknownVoice(SayVoice):
-    """A MAVIS_TTS that names no voice: he starts, in `say`, and says why."""
+    """A MAVIS_TTS that names no voice: he starts degraded and says why,
+    speaking in `say` on a Mac (on Linux, nothing is behind it)."""
 
     def __init__(self, name):
         self.name = "say"
