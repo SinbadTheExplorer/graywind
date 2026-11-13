@@ -42,7 +42,6 @@ window.__johnny = {S, get state(){return S.state}, get fps(){return S.fps},
 // ---------------- small UI helpers ----------------
 function show(id){
   for (const s of ['screen-key', 'screen-idle', 'screen-call']) $(s).classList.toggle('hidden', s !== id);
-  document.body.classList.toggle('idle', id !== 'screen-call');
 }
 function toast(msg){
   const el = document.createElement('div'); el.className = 'toast'; el.textContent = msg;
@@ -176,7 +175,9 @@ function loop(now){
   if (!S.modelLoaded && !$('orb').classList.contains('hidden')) {
     $('orb').style.transform = `scale(${1 + S.mouth * 0.35})`;
   }
-  if (S.renderer && S.modelLoaded) S.renderer.render(S.scene, S.camera);
+  // Hidden until a call connects: skip drawing once the .8s CSS fade-out is over.
+  const visible = S.live || now - (S.hiddenAt || 0) < 1000;
+  if (S.renderer && S.modelLoaded && visible) S.renderer.render(S.scene, S.camera);
 
   fpsAcc += dt; fpsN++;
   if (fpsAcc >= 0.5) {
@@ -341,19 +342,22 @@ function openCall(){
   };
 }
 function onMessage(data){
+  let msg = null;
+  if (typeof data === 'string') { try { msg = JSON.parse(data); } catch { return; } }
+  // A refused call sends an error and then closes: don't show Johnny for it.
+  if (msg && msg.type === 'error') { toast(msg.message); return; }
   if (!S.callStart) {
     S.callStart = Date.now();
+    setLive(true);
     S.timer = setInterval(() => {
       const s = Math.floor((Date.now() - S.callStart) / 1000);
       $('timer').textContent = `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
     }, 500);
   }
-  if (typeof data !== 'string') { enqueue(data); return; }
-  let msg; try { msg = JSON.parse(data); } catch { return; }
+  if (!msg) { enqueue(data); return; }
   if (msg.type === 'state') { setState(msg.state); fadeTo(STATE_CLIP[msg.state] || 'idle'); }
   else if (msg.type === 'caption') caption(msg.text);
   else if (msg.type === 'heard') caption(`“${msg.text}”`);
-  else if (msg.type === 'error') toast(msg.message);
   else if (msg.type === 'bye') {
     S.endAfterPlayback = true; maybeFinish();
     // If playback never drains (screen locked, audio suspended), hang up anyway.
@@ -374,8 +378,15 @@ function endCall(userPressed){
   if (S.wakeLock) { S.wakeLock.release().catch(() => {}); S.wakeLock = null; }
   $('caption').classList.remove('show');
   S.state = 'idle';
+  setLive(false);
   fadeTo('dismiss');
   show('screen-idle');
+}
+// Johnny is shown only while a call is connected (CSS fades body.live in/out).
+function setLive(on){
+  S.live = !!on;
+  document.body.classList.toggle('live', S.live);
+  if (!on) S.hiddenAt = performance.now();
 }
 function updateMute(){
   $('muteBtn').classList.toggle('on', S.muted);

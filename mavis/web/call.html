@@ -21,8 +21,7 @@
 html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--text);
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   -webkit-tap-highlight-color:transparent}
-#stage{position:fixed;inset:0;width:100%;height:100%;display:block;transition:filter .6s}
-body.idle #stage{filter:brightness(.45)}
+#stage{position:fixed;inset:0;width:100%;height:100%;display:block}
 .screen{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
   padding:env(safe-area-inset-top) 16px env(safe-area-inset-bottom);z-index:1}
 .hidden{display:none!important}
@@ -60,9 +59,15 @@ footer{position:fixed;left:0;right:0;bottom:calc(6px + env(safe-area-inset-botto
 @keyframes fade{0%{opacity:0}8%{opacity:1}85%{opacity:1}100%{opacity:0}}
 #orb{position:fixed;left:50%;top:42%;width:160px;height:160px;margin:-80px 0 0 -80px;border-radius:50%;
   background:radial-gradient(circle at 32% 30%,var(--accent),var(--cyan));z-index:0}
+#stage,#orb{opacity:0;transition:opacity .8s}
+body.live #stage,body.live #orb{opacity:1}
 #fps{position:fixed;top:4px;left:6px;font:12px monospace;color:#9f9;z-index:9}
 #loading{color:var(--muted);font-size:14px;margin-top:10px}
-#screen-idle{justify-content:flex-end;padding-bottom:calc(48px + env(safe-area-inset-bottom))}
+#screen-idle{justify-content:center}
+.card.bare{background:none;border:0;-webkit-backdrop-filter:none;backdrop-filter:none}
+/* Fade out the icon's square backdrop so only the tilted seal shows on black. */
+.seal{width:150px;display:block;margin:0 auto 8px;
+  -webkit-mask-image:radial-gradient(closest-side,#000 88%,transparent);mask-image:radial-gradient(closest-side,#000 88%,transparent)}
 </style>
 <script type="importmap">
 {"imports":{
@@ -71,7 +76,7 @@ footer{position:fixed;left:0;right:0;bottom:calc(6px + env(safe-area-inset-botto
 }}
 </script>
 </head>
-<body class="idle">
+<body>
 <canvas id="stage"></canvas>
 <div id="orb" class="hidden"></div>
 
@@ -86,9 +91,9 @@ footer{position:fixed;left:0;right:0;bottom:calc(6px + env(safe-area-inset-botto
 </div>
 
 <div id="screen-idle" class="screen hidden">
-  <div class="card">
+  <div class="card bare">
+    <img src="/johnny/icons/icon-512.png" class="seal" alt="">
     <h1 class="title">Johnny</h1>
-    <p>Your fixer. Mostly sober.</p>
     <button id="callBtn" class="round call" aria-label="Call Johnny">Call</button>
     <div id="loading">loading Johnny…</div>
     <button id="changeKey" class="link">change key</button>
