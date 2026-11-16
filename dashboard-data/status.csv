@@ -1,3 +1,3 @@
 last_cycle_timestamp,account_equity,today_pnl,symbol,position_open,shares,entry_price,current_price,action,reason
-2026-11-16T13:15:49.440687-05:00,99474.54,-84.51000000000931,AAPL,True,28.9267,348.07,353.64,hold,already holding 28.9267 shares
-2026-11-16T13:15:49.440687-05:00,99474.54,-84.51000000000931,SERV,False,,,2.465,hold,no buy signal
+2026-11-16T13:30:45.229294-05:00,99440.15,-118.90000000000873,AAPL,True,28.9267,348.07,352.805,hold,already holding 28.9267 shares
+2026-11-16T13:30:45.229294-05:00,99440.15,-118.90000000000873,SERV,False,,,2.44,hold,no buy signal
