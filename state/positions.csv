@@ -1,2 +1,2 @@
 symbol,entry_price,shares,stop,target,opened_date,pending_sell_order_id,pending_sell_order_covers
-AAPL,348.07,28.9267,343.96,361.5,2026-11-10,,
+AAPL,348.07,28.9267,343.96,361.5,2026-11-10,3fa1d4e2-a69e-4730-a091-92d9e967c7b0,
